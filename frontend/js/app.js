@@ -1,0 +1,401 @@
+// Core Application Controller for CamCounter AI Dashboard
+
+let currentCameraId = null;
+let allCameras = [];
+let ws = null;
+let editor = null;
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+  window.ChartsManager.initCharts();
+  editor = new window.CanvasEditor('interactive-editor-canvas', 'stream-viewport-container');
+
+  setupEventListeners();
+  loadCameras();
+  connectWebSocket();
+});
+
+// Setup Event Listeners
+function setupEventListeners() {
+  // Add Camera Modal
+  const modal = document.getElementById('modal-add-camera');
+  const openBtn = document.getElementById('btn-open-add-camera');
+  const closeBtn = document.getElementById('btn-close-camera-modal');
+  const cancelBtn = document.getElementById('btn-cancel-camera-modal');
+  const camTypeSelect = document.getElementById('input-cam-type');
+  const camForm = document.getElementById('form-add-camera');
+
+  openBtn.addEventListener('click', () => modal.classList.add('open'));
+  closeBtn.addEventListener('click', () => modal.classList.remove('open'));
+  cancelBtn.addEventListener('click', () => modal.classList.remove('open'));
+
+  // Toggle form fields based on camera source type
+  camTypeSelect.addEventListener('change', (e) => {
+    const val = e.target.value;
+    const urlGroup = document.getElementById('group-source-url');
+    const fileGroup = document.getElementById('group-upload-file');
+    const urlLabel = document.getElementById('label-source-url');
+    const urlInput = document.getElementById('input-cam-url');
+
+    if (val === 'webcam') {
+      urlGroup.style.display = 'block';
+      fileGroup.style.display = 'none';
+      urlLabel.textContent = 'Device Index (0, 1, 2...)';
+      urlInput.value = '0';
+    } else if (val === 'rtsp') {
+      urlGroup.style.display = 'block';
+      fileGroup.style.display = 'none';
+      urlLabel.textContent = 'RTSP URL (rtsp://admin:pass@ip:554/stream1)';
+      urlInput.value = 'rtsp://192.168.1.100:554/live';
+    } else if (val === 'http') {
+      urlGroup.style.display = 'block';
+      fileGroup.style.display = 'none';
+      urlLabel.textContent = 'HTTP / MJPEG Stream URL';
+      urlInput.value = 'http://192.168.1.100:8080/video';
+    } else if (val === 'file') {
+      urlGroup.style.display = 'none';
+      fileGroup.style.display = 'block';
+    } else if (val === 'synthetic') {
+      urlGroup.style.display = 'none';
+      fileGroup.style.display = 'none';
+    }
+  });
+
+  // Handle Add Camera Form Submit
+  camForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('input-cam-name').value;
+    const type = document.getElementById('input-cam-type').value;
+    const alertThresh = parseInt(document.getElementById('input-cam-alert-thresh').value) || 20;
+
+    if (type === 'file') {
+      const fileInput = document.getElementById('input-cam-file');
+      if (fileInput.files.length > 0) {
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        formData.append('name', name);
+        try {
+          const res = await fetch('/api/cameras/upload-video', { method: 'POST', body: formData });
+          const newCam = await res.json();
+          modal.classList.remove('open');
+          await loadCameras();
+          selectCamera(newCam.id);
+        } catch (err) {
+          alert('Error uploading video: ' + err);
+        }
+      }
+    } else {
+      const url = type === 'synthetic' ? 'demo' : document.getElementById('input-cam-url').value;
+      const payload = {
+        id: 'cam_' + Date.now().toString(36),
+        name: name,
+        source_type: type,
+        source_url: url,
+        enabled: true,
+        alert_max_occupancy: alertThresh,
+        lines: [],
+        zones: []
+      };
+
+      try {
+        const res = await fetch('/api/cameras', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const saved = await res.json();
+        modal.classList.remove('open');
+        await loadCameras();
+        selectCamera(saved.id);
+      } catch (err) {
+        alert('Error adding camera: ' + err);
+      }
+    }
+  });
+
+  // Delete Camera
+  document.getElementById('btn-delete-camera').addEventListener('click', async () => {
+    if (!currentCameraId) return;
+    if (confirm('Are you sure you want to remove this camera?')) {
+      await fetch(`/api/cameras/${currentCameraId}`, { method: 'DELETE' });
+      await loadCameras();
+    }
+  });
+
+  // Snapshot
+  document.getElementById('btn-take-snapshot').addEventListener('click', () => {
+    if (!currentCameraId) return;
+    window.open(`/api/snapshot/${currentCameraId}`, '_blank');
+  });
+
+  // Export CSV
+  document.getElementById('btn-export-csv').addEventListener('click', () => {
+    if (!currentCameraId) return;
+    window.location.href = `/api/stats/${currentCameraId}/export-csv`;
+  });
+
+  // Interactive Drawing
+  document.getElementById('btn-draw-line').addEventListener('click', () => {
+    editor.startDrawLine(async (shapeType, shapeData) => {
+      const cam = allCameras.find(c => c.id === currentCameraId);
+      if (cam) {
+        cam.lines.push(shapeData);
+        await updateCameraConfig(cam);
+      }
+    });
+  });
+
+  document.getElementById('btn-draw-zone').addEventListener('click', () => {
+    editor.startDrawZone(async (shapeType, shapeData) => {
+      const cam = allCameras.find(c => c.id === currentCameraId);
+      if (cam) {
+        cam.zones.push(shapeData);
+        await updateCameraConfig(cam);
+      }
+    });
+  });
+
+  document.getElementById('btn-clear-drawings').addEventListener('click', () => {
+    editor.cancelDrawing();
+  });
+
+  // Overlay Toggles
+  ['chk-show-boxes', 'chk-show-labels', 'chk-show-trails', 'chk-show-lines', 'chk-show-zones'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('change', async () => {
+        const cam = allCameras.find(c => c.id === currentCameraId);
+        if (cam) {
+          cam.show_boxes = document.getElementById('chk-show-boxes').checked;
+          cam.show_labels = document.getElementById('chk-show-labels').checked;
+          cam.show_trails = document.getElementById('chk-show-trails').checked;
+          cam.show_lines = document.getElementById('chk-show-lines').checked;
+          cam.show_zones = document.getElementById('chk-show-zones').checked;
+          await updateCameraConfig(cam);
+        }
+      });
+    }
+  });
+}
+
+// Fetch all cameras
+async function loadCameras() {
+  try {
+    const res = await fetch('/api/cameras');
+    allCameras = await res.json();
+    renderCameraList();
+
+    if (allCameras.length > 0) {
+      if (!currentCameraId || !allCameras.some(c => c.id === currentCameraId)) {
+        selectCamera(allCameras[0].id);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load cameras:', err);
+  }
+}
+
+// Render camera cards in sidebar
+function renderCameraList() {
+  const container = document.getElementById('camera-list-container');
+  const countBadge = document.getElementById('camera-count-badge');
+  container.innerHTML = '';
+  countBadge.textContent = `${allCameras.length} Feed${allCameras.length === 1 ? '' : 's'}`;
+
+  allCameras.forEach(cam => {
+    const card = document.createElement('div');
+    card.className = `camera-card ${cam.id === currentCameraId ? 'active' : ''}`;
+    card.onclick = () => selectCamera(cam.id);
+
+    card.innerHTML = `
+      <div class="cam-header">
+        <span class="cam-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 7l-7 5 7 5V7z"></path>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+          </svg>
+          ${escapeHtml(cam.name)}
+        </span>
+        <span class="cam-pill pill-live">LIVE</span>
+      </div>
+      <div class="cam-meta">
+        <span>${cam.source_type.toUpperCase()}</span>
+        <span class="cam-occ-badge" id="sidebar-occ-${cam.id}">0 Inside</span>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+// Switch active camera
+function selectCamera(camId) {
+  currentCameraId = camId;
+  const cam = allCameras.find(c => c.id === camId);
+  if (!cam) return;
+
+  // Update UI headers
+  document.getElementById('current-camera-title').textContent = cam.name;
+  document.getElementById('label-alert-cap').textContent = cam.alert_max_occupancy || 20;
+
+  // Update Checkboxes
+  document.getElementById('chk-show-boxes').checked = cam.show_boxes;
+  document.getElementById('chk-show-labels').checked = cam.show_labels;
+  document.getElementById('chk-show-trails').checked = cam.show_trails;
+  document.getElementById('chk-show-lines').checked = cam.show_lines;
+  document.getElementById('chk-show-zones').checked = cam.show_zones;
+
+  // Update Video Stream URL
+  const img = document.getElementById('main-stream-img');
+  img.src = `/api/stream/${camId}?t=${Date.now()}`;
+
+  // Update active card styling
+  document.querySelectorAll('.camera-card').forEach(card => card.classList.remove('active'));
+  renderCameraList();
+}
+
+// Update camera config via API
+async function updateCameraConfig(camConfig) {
+  try {
+    await fetch(`/api/cameras/${camConfig.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(camConfig)
+    });
+  } catch (err) {
+    console.error('Failed to update camera config:', err);
+  }
+}
+
+// Connect to WebSocket for real-time telemetry
+function connectWebSocket() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    console.log('Telemetry WebSocket connected.');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'telemetry') {
+        handleTelemetry(msg.data);
+      }
+    } catch (err) {
+      console.error('Error parsing WS message:', err);
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('WS disconnected. Reconnecting in 2s...');
+    setTimeout(connectWebSocket, 2000);
+  };
+}
+
+// Process live telemetry
+function handleTelemetry(allData) {
+  for (const [camId, data] of Object.entries(allData)) {
+    // Update sidebar badge
+    const badge = document.getElementById(`sidebar-occ-${camId}`);
+    if (badge) {
+      badge.textContent = `${data.current_occupancy} Inside`;
+    }
+
+    // If current camera, update main dashboard KPIs
+    if (camId === currentCameraId) {
+      document.getElementById('val-current-occupancy').textContent = data.current_occupancy;
+      document.getElementById('val-total-in').textContent = data.total_in;
+      document.getElementById('val-total-out').textContent = data.total_out;
+      document.getElementById('val-net-flow').textContent = data.net_flow >= 0 ? `+${data.net_flow}` : data.net_flow;
+      document.getElementById('val-peak-occupancy').textContent = data.peak_occupancy;
+      document.getElementById('val-fps').textContent = data.fps ? data.fps.toFixed(1) : '0.0';
+
+      // Update Chart.js
+      window.ChartsManager.updateLiveOccupancyChart(data.current_occupancy);
+      window.ChartsManager.updateHourlyChart(data.total_in, data.total_out);
+
+      // Update Zones Table
+      renderZonesTable(data.zones);
+
+      // Update Tripwires Table
+      renderLinesTable(data.lines);
+
+      // Update Event Stream Log
+      if (data.events && data.events.length > 0) {
+        data.events.forEach(addEventLog);
+      }
+    }
+  }
+}
+
+function renderZonesTable(zones) {
+  const tbody = document.getElementById('zones-tbody');
+  tbody.innerHTML = '';
+  if (!zones || Object.keys(zones).length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color: var(--text-muted);">No zones defined</td></tr>';
+    return;
+  }
+
+  for (const [zid, z] of Object.entries(zones)) {
+    const tr = document.createElement('tr');
+    const isWarning = z.current_count >= z.max_capacity;
+    tr.innerHTML = `
+      <td><strong>${escapeHtml(z.name)}</strong></td>
+      <td><span style="color: ${isWarning ? 'var(--accent-rose)' : 'var(--accent-cyan)'}; font-weight:700;">${z.current_count}</span></td>
+      <td>
+        ${z.max_capacity}
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill ${isWarning ? 'warning' : ''}" style="width: ${Math.min(100, z.occupancy_rate)}%;"></div>
+        </div>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderLinesTable(lines) {
+  const tbody = document.getElementById('lines-tbody');
+  tbody.innerHTML = '';
+  if (!lines || Object.keys(lines).length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color: var(--text-muted);">No tripwires defined</td></tr>';
+    return;
+  }
+
+  for (const [lid, l] of Object.entries(lines)) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${escapeHtml(l.name)}</strong></td>
+      <td style="color: var(--accent-green); font-weight:700;">+${l.in_count}</td>
+      <td style="color: var(--accent-amber); font-weight:700;">-${l.out_count}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function addEventLog(ev) {
+  const container = document.getElementById('events-log-container');
+  const div = document.createElement('div');
+  div.style.padding = '6px 8px';
+  div.style.borderRadius = '6px';
+  div.style.background = 'rgba(255, 255, 255, 0.04)';
+  div.style.borderLeft = `3px solid ${ev.direction === 'IN' ? 'var(--accent-green)' : 'var(--accent-amber)'}`;
+  
+  const timeStr = new Date(ev.timestamp * 1000).toLocaleTimeString();
+  div.innerHTML = `
+    <span style="color: var(--text-muted);">${timeStr}</span>
+    <strong style="color: ${ev.direction === 'IN' ? 'var(--accent-green)' : 'var(--accent-amber)'}; margin: 0 4px;">[${ev.direction}]</strong>
+    <span>Person #${ev.track_id} crossed ${escapeHtml(ev.line_name)}</span>
+  `;
+
+  container.prepend(div);
+  if (container.children.length > 20) {
+    container.removeChild(container.lastChild);
+  }
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
