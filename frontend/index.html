@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="AI-powered people counting and surveillance analytics dashboard with real-time detection, tripwire counting, and occupancy monitoring.">
   <title>AI People Counter & Surveillance Analytics</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,9 +13,12 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
+  <!-- Sidebar overlay (mobile: tap to close sidebar) -->
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
   <div class="app-container">
     <!-- Left Sidebar: Camera List & Management -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="brand-header">
         <div class="brand-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -55,6 +59,15 @@
     <main class="main-content">
       <!-- Top Navigation -->
       <header class="top-nav">
+        <!-- Hamburger (mobile only) -->
+        <button class="hamburger-btn" id="btn-hamburger" aria-label="Open Menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+
         <div class="active-cam-heading">
           <h2 id="current-camera-title">Loading Camera...</h2>
           <div class="live-indicator">
@@ -70,14 +83,14 @@
               <polyline points="7 10 12 15 17 10"></polyline>
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
-            Export CSV
+            <span class="btn-text">Export CSV</span>
           </button>
           <button class="btn btn-secondary btn-sm" id="btn-take-snapshot" title="Take High-Res Snapshot">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
               <circle cx="12" cy="13" r="4"></circle>
             </svg>
-            Snapshot
+            <span class="btn-text">Snapshot</span>
           </button>
           <button class="btn btn-danger btn-sm" id="btn-delete-camera" title="Delete Camera">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -172,13 +185,13 @@
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <line x1="5" y1="12" x2="19" y2="12"></line>
                   </svg>
-                  + Add Tripwire Line
+                  <span class="toolbar-btn-text">+ Add Tripwire</span>
                 </button>
                 <button class="btn btn-secondary btn-sm" id="btn-draw-zone">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polygon points="12 2 2 22 22 22"></polygon>
                   </svg>
-                  + Add Polygon Zone
+                  <span class="toolbar-btn-text">+ Add Zone</span>
                 </button>
                 <button class="btn btn-secondary btn-sm" id="btn-clear-drawings" style="display:none;">
                   Cancel Drawing
@@ -206,15 +219,15 @@
               <div class="toggle-group">
                 <label class="toggle-label">
                   <input type="checkbox" id="chk-show-boxes" checked>
-                  <span>Bounding Boxes</span>
+                  <span>Boxes</span>
                 </label>
                 <label class="toggle-label">
                   <input type="checkbox" id="chk-show-labels" checked>
-                  <span>Person IDs</span>
+                  <span>IDs</span>
                 </label>
                 <label class="toggle-label">
                   <input type="checkbox" id="chk-show-trails" checked>
-                  <span>Motion Trails</span>
+                  <span>Trails</span>
                 </label>
                 <label class="toggle-label">
                   <input type="checkbox" id="chk-show-lines" checked>
@@ -344,6 +357,7 @@
           <label>Source Type</label>
           <select id="input-cam-type" class="form-control">
             <option value="webcam">USB / Integrated Webcam</option>
+            <option value="browser">📱 Phone Camera (Browser)</option>
             <option value="rtsp">RTSP / IP Surveillance Camera</option>
             <option value="http">HTTP / MJPEG Stream</option>
             <option value="file">Video File (Upload or Local Path)</option>
@@ -361,6 +375,19 @@
           <input type="file" id="input-cam-file" class="form-control" accept="video/*" />
         </div>
 
+        <!-- Camera Facing Selector (Phone Camera only) -->
+        <div class="form-group" id="group-camera-facing" style="display: none;">
+          <label>Camera Facing</label>
+          <div class="facing-selector">
+            <button type="button" class="facing-btn active" data-facing="environment" id="btn-facing-back">
+              📸 Back Camera
+            </button>
+            <button type="button" class="facing-btn" data-facing="user" id="btn-facing-front">
+              🤳 Front Camera
+            </button>
+          </div>
+        </div>
+
         <div class="form-group">
           <label>Max Occupancy Alert Threshold</label>
           <input type="number" id="input-cam-alert-thresh" class="form-control" value="20" min="1" max="500" />
@@ -373,6 +400,10 @@
       </form>
     </div>
   </div>
+
+  <!-- Hidden elements for browser camera capture -->
+  <video id="browser-cam-video" autoplay playsinline muted></video>
+  <canvas id="browser-cam-canvas"></canvas>
 
   <!-- Scripts -->
   <script src="js/charts.js"></script>

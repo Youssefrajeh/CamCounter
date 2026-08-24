@@ -4,6 +4,7 @@ let currentCameraId = null;
 let allCameras = [];
 let ws = null;
 let editor = null;
+let browserCamStream = null; // Active browser camera stream
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -15,8 +16,192 @@ document.addEventListener('DOMContentLoaded', () => {
   connectWebSocket();
 });
 
+// =============================================
+// Browser Camera Stream (Phone Camera)
+// =============================================
+
+class BrowserCameraStream {
+  constructor(cameraId, facingMode = 'environment') {
+    this.cameraId = cameraId;
+    this.facingMode = facingMode;
+    this.video = document.getElementById('browser-cam-video');
+    this.captureCanvas = document.getElementById('browser-cam-canvas');
+    this.captureCtx = this.captureCanvas.getContext('2d');
+    this.ws = null;
+    this.mediaStream = null;
+    this.running = false;
+    this.sendInterval = null;
+    this.targetFps = 8; // Send 8 frames/sec to backend
+  }
+
+  async start() {
+    try {
+      // Request camera access
+      const constraints = {
+        video: {
+          facingMode: this.facingMode,
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        },
+        audio: false
+      };
+
+      this.mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.video.srcObject = this.mediaStream;
+      await this.video.play();
+
+      // Set canvas to match video dimensions
+      this.video.addEventListener('loadedmetadata', () => {
+        this.captureCanvas.width = this.video.videoWidth;
+        this.captureCanvas.height = this.video.videoHeight;
+      });
+
+      // Wait for video to be ready
+      await new Promise(resolve => {
+        if (this.video.readyState >= 2) resolve();
+        else this.video.addEventListener('loadeddata', resolve, { once: true });
+      });
+
+      this.captureCanvas.width = this.video.videoWidth || 640;
+      this.captureCanvas.height = this.video.videoHeight || 480;
+
+      // Open WebSocket to backend
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/browser-cam/${this.cameraId}`;
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.onopen = () => {
+        console.log(`Browser camera WebSocket connected for ${this.cameraId}`);
+        this.running = true;
+        this._startSendingFrames();
+      };
+
+      this.ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'result') {
+            // Display annotated frame from backend
+            if (msg.frame) {
+              const streamImg = document.getElementById('main-stream-img');
+              streamImg.src = msg.frame;
+            }
+            // Update analytics if this is the current camera
+            if (msg.analytics && this.cameraId === currentCameraId) {
+              updateDashboardFromAnalytics(msg.analytics);
+            }
+          } else if (msg.type === 'error') {
+            console.error('Browser cam error:', msg.message);
+          }
+        } catch (err) {
+          console.error('Error parsing browser cam WS message:', err);
+        }
+      };
+
+      this.ws.onclose = () => {
+        console.log('Browser camera WebSocket closed');
+        this.running = false;
+      };
+
+      this.ws.onerror = (err) => {
+        console.error('Browser camera WebSocket error:', err);
+      };
+
+    } catch (err) {
+      console.error('Failed to start browser camera:', err);
+      alert('Could not access the camera. Please ensure camera permissions are granted and you are using HTTPS.');
+      throw err;
+    }
+  }
+
+  _startSendingFrames() {
+    const interval = 1000 / this.targetFps;
+    this.sendInterval = setInterval(() => {
+      if (!this.running || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      // Don't send if a previous frame is still buffered
+      if (this.ws.bufferedAmount > 50000) return;
+
+      // Capture frame from video
+      this.captureCtx.drawImage(this.video, 0, 0, this.captureCanvas.width, this.captureCanvas.height);
+      const dataUrl = this.captureCanvas.toDataURL('image/jpeg', 0.7);
+
+      // Send to backend
+      this.ws.send(JSON.stringify({
+        type: 'frame',
+        data: dataUrl
+      }));
+    }, interval);
+  }
+
+  stop() {
+    this.running = false;
+
+    if (this.sendInterval) {
+      clearInterval(this.sendInterval);
+      this.sendInterval = null;
+    }
+
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach(track => track.stop());
+      this.mediaStream = null;
+    }
+
+    this.video.srcObject = null;
+    console.log('Browser camera stream stopped');
+  }
+}
+
+
+// Update dashboard KPIs from analytics data (used by both WS telemetry and browser cam)
+function updateDashboardFromAnalytics(data) {
+  document.getElementById('val-current-occupancy').textContent = data.current_occupancy;
+  document.getElementById('val-total-in').textContent = data.total_in;
+  document.getElementById('val-total-out').textContent = data.total_out;
+  document.getElementById('val-net-flow').textContent = data.net_flow >= 0 ? `+${data.net_flow}` : data.net_flow;
+  document.getElementById('val-peak-occupancy').textContent = data.peak_occupancy;
+  document.getElementById('val-fps').textContent = data.fps ? data.fps.toFixed(1) : '0.0';
+
+  // Update Chart.js
+  window.ChartsManager.updateLiveOccupancyChart(data.current_occupancy);
+  window.ChartsManager.updateHourlyChart(data.total_in, data.total_out);
+
+  // Update Zones Table
+  renderZonesTable(data.zones);
+
+  // Update Tripwires Table
+  renderLinesTable(data.lines);
+
+  // Update Event Stream Log
+  if (data.events && data.events.length > 0) {
+    data.events.forEach(addEventLog);
+  }
+}
+
+
+// =============================================
 // Setup Event Listeners
+// =============================================
+
 function setupEventListeners() {
+  // Hamburger menu (mobile)
+  const hamburgerBtn = document.getElementById('btn-hamburger');
+  const sidebar = document.getElementById('sidebar');
+  const sidebarOverlay = document.getElementById('sidebar-overlay');
+
+  hamburgerBtn.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+    sidebarOverlay.classList.toggle('open');
+  });
+
+  sidebarOverlay.addEventListener('click', () => {
+    sidebar.classList.remove('open');
+    sidebarOverlay.classList.remove('open');
+  });
+
   // Add Camera Modal
   const modal = document.getElementById('modal-add-camera');
   const openBtn = document.getElementById('btn-open-add-camera');
@@ -25,31 +210,47 @@ function setupEventListeners() {
   const camTypeSelect = document.getElementById('input-cam-type');
   const camForm = document.getElementById('form-add-camera');
 
-  openBtn.addEventListener('click', () => modal.classList.add('open'));
+  openBtn.addEventListener('click', () => {
+    modal.classList.add('open');
+    // Close sidebar on mobile when opening modal
+    sidebar.classList.remove('open');
+    sidebarOverlay.classList.remove('open');
+  });
   closeBtn.addEventListener('click', () => modal.classList.remove('open'));
   cancelBtn.addEventListener('click', () => modal.classList.remove('open'));
+
+  // Camera facing selector buttons
+  document.querySelectorAll('.facing-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.facing-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
 
   // Toggle form fields based on camera source type
   camTypeSelect.addEventListener('change', (e) => {
     const val = e.target.value;
     const urlGroup = document.getElementById('group-source-url');
     const fileGroup = document.getElementById('group-upload-file');
+    const facingGroup = document.getElementById('group-camera-facing');
     const urlLabel = document.getElementById('label-source-url');
     const urlInput = document.getElementById('input-cam-url');
 
+    // Reset visibility
+    urlGroup.style.display = 'block';
+    fileGroup.style.display = 'none';
+    facingGroup.style.display = 'none';
+
     if (val === 'webcam') {
-      urlGroup.style.display = 'block';
-      fileGroup.style.display = 'none';
       urlLabel.textContent = 'Device Index (0, 1, 2...)';
       urlInput.value = '0';
+    } else if (val === 'browser') {
+      urlGroup.style.display = 'none';
+      facingGroup.style.display = 'block';
     } else if (val === 'rtsp') {
-      urlGroup.style.display = 'block';
-      fileGroup.style.display = 'none';
       urlLabel.textContent = 'RTSP URL (rtsp://admin:pass@ip:554/stream1)';
       urlInput.value = 'rtsp://192.168.1.100:554/live';
     } else if (val === 'http') {
-      urlGroup.style.display = 'block';
-      fileGroup.style.display = 'none';
       urlLabel.textContent = 'HTTP / MJPEG Stream URL';
       urlInput.value = 'http://192.168.1.100:8080/video';
     } else if (val === 'file') {
@@ -57,7 +258,6 @@ function setupEventListeners() {
       fileGroup.style.display = 'block';
     } else if (val === 'synthetic') {
       urlGroup.style.display = 'none';
-      fileGroup.style.display = 'none';
     }
   });
 
@@ -85,7 +285,16 @@ function setupEventListeners() {
         }
       }
     } else {
-      const url = type === 'synthetic' ? 'demo' : document.getElementById('input-cam-url').value;
+      let url = '';
+      if (type === 'synthetic') {
+        url = 'demo';
+      } else if (type === 'browser') {
+        const activeFacing = document.querySelector('.facing-btn.active');
+        url = activeFacing ? activeFacing.dataset.facing : 'environment';
+      } else {
+        url = document.getElementById('input-cam-url').value;
+      }
+
       const payload = {
         id: 'cam_' + Date.now().toString(36),
         name: name,
@@ -117,6 +326,11 @@ function setupEventListeners() {
   document.getElementById('btn-delete-camera').addEventListener('click', async () => {
     if (!currentCameraId) return;
     if (confirm('Are you sure you want to remove this camera?')) {
+      // Stop browser cam if active
+      if (browserCamStream && browserCamStream.cameraId === currentCameraId) {
+        browserCamStream.stop();
+        browserCamStream = null;
+      }
       await fetch(`/api/cameras/${currentCameraId}`, { method: 'DELETE' });
       await loadCameras();
     }
@@ -205,7 +419,14 @@ function renderCameraList() {
   allCameras.forEach(cam => {
     const card = document.createElement('div');
     card.className = `camera-card ${cam.id === currentCameraId ? 'active' : ''}`;
-    card.onclick = () => selectCamera(cam.id);
+    card.onclick = () => {
+      selectCamera(cam.id);
+      // Close sidebar on mobile after selection
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebar-overlay').classList.remove('open');
+    };
+
+    const typeLabel = cam.source_type === 'browser' ? '📱 PHONE' : cam.source_type.toUpperCase();
 
     card.innerHTML = `
       <div class="cam-header">
@@ -219,7 +440,7 @@ function renderCameraList() {
         <span class="cam-pill pill-live">LIVE</span>
       </div>
       <div class="cam-meta">
-        <span>${cam.source_type.toUpperCase()}</span>
+        <span>${typeLabel}</span>
         <span class="cam-occ-badge" id="sidebar-occ-${cam.id}">0 Inside</span>
       </div>
     `;
@@ -229,6 +450,12 @@ function renderCameraList() {
 
 // Switch active camera
 function selectCamera(camId) {
+  // Stop previous browser camera if switching away
+  if (browserCamStream && browserCamStream.cameraId !== camId) {
+    browserCamStream.stop();
+    browserCamStream = null;
+  }
+
   currentCameraId = camId;
   const cam = allCameras.find(c => c.id === camId);
   if (!cam) return;
@@ -244,9 +471,23 @@ function selectCamera(camId) {
   document.getElementById('chk-show-lines').checked = cam.show_lines;
   document.getElementById('chk-show-zones').checked = cam.show_zones;
 
-  // Update Video Stream URL
-  const img = document.getElementById('main-stream-img');
-  img.src = `/api/stream/${camId}?t=${Date.now()}`;
+  if (cam.source_type === 'browser') {
+    // Start browser camera stream
+    const facingMode = cam.source_url || 'environment';
+    browserCamStream = new BrowserCameraStream(camId, facingMode);
+    browserCamStream.start().catch(err => {
+      console.error('Failed to start browser camera:', err);
+    });
+    // Set a placeholder while the camera starts
+    const img = document.getElementById('main-stream-img');
+    img.src = '';
+    img.alt = 'Starting phone camera...';
+  } else {
+    // Standard MJPEG stream from backend
+    const img = document.getElementById('main-stream-img');
+    img.src = `/api/stream/${camId}?t=${Date.now()}`;
+    img.alt = 'Camera Stream';
+  }
 
   // Update active card styling
   document.querySelectorAll('.camera-card').forEach(card => card.classList.remove('active'));
@@ -303,28 +544,11 @@ function handleTelemetry(allData) {
       badge.textContent = `${data.current_occupancy} Inside`;
     }
 
-    // If current camera, update main dashboard KPIs
+    // If current camera (and not a browser cam — those update via their own WS)
     if (camId === currentCameraId) {
-      document.getElementById('val-current-occupancy').textContent = data.current_occupancy;
-      document.getElementById('val-total-in').textContent = data.total_in;
-      document.getElementById('val-total-out').textContent = data.total_out;
-      document.getElementById('val-net-flow').textContent = data.net_flow >= 0 ? `+${data.net_flow}` : data.net_flow;
-      document.getElementById('val-peak-occupancy').textContent = data.peak_occupancy;
-      document.getElementById('val-fps').textContent = data.fps ? data.fps.toFixed(1) : '0.0';
-
-      // Update Chart.js
-      window.ChartsManager.updateLiveOccupancyChart(data.current_occupancy);
-      window.ChartsManager.updateHourlyChart(data.total_in, data.total_out);
-
-      // Update Zones Table
-      renderZonesTable(data.zones);
-
-      // Update Tripwires Table
-      renderLinesTable(data.lines);
-
-      // Update Event Stream Log
-      if (data.events && data.events.length > 0) {
-        data.events.forEach(addEventLog);
+      const cam = allCameras.find(c => c.id === camId);
+      if (cam && cam.source_type !== 'browser') {
+        updateDashboardFromAnalytics(data);
       }
     }
   }

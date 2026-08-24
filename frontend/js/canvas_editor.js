@@ -1,4 +1,5 @@
 // Interactive Canvas Editor for Tripwires and Zones on Live Video
+// Supports both mouse and touch events for mobile compatibility
 
 class CanvasEditor {
   constructor(canvasId, containerId) {
@@ -24,8 +25,58 @@ class CanvasEditor {
   }
 
   _setupEvents() {
+    // Mouse events
     this.canvas.addEventListener('click', (e) => this._handleClick(e));
     this.canvas.addEventListener('mousemove', (e) => this._handleMouseMove(e));
+
+    // Touch events for mobile
+    this.canvas.addEventListener('touchstart', (e) => this._handleTouchStart(e), { passive: false });
+    this.canvas.addEventListener('touchmove', (e) => this._handleTouchMove(e), { passive: false });
+    this.canvas.addEventListener('touchend', (e) => this._handleTouchEnd(e), { passive: false });
+  }
+
+  _getTouchPos(e) {
+    const touch = e.touches[0] || e.changedTouches[0];
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: touch.clientX - rect.left,
+      y: touch.clientY - rect.top
+    };
+  }
+
+  _handleTouchStart(e) {
+    if (this.mode === 'idle') return;
+    e.preventDefault(); // Prevent scroll while drawing
+  }
+
+  _handleTouchMove(e) {
+    if (this.mode === 'idle' || this.points.length === 0) return;
+    e.preventDefault();
+    const pos = this._getTouchPos(e);
+
+    this.render();
+
+    // Draw preview line to touch position
+    this.ctx.strokeStyle = '#06B6D4';
+    this.ctx.lineWidth = 2;
+    this.ctx.setLineDash([6, 6]);
+    this.ctx.beginPath();
+    const lastP = this.points[this.points.length - 1];
+    this.ctx.moveTo(lastP.x * this.canvas.width, lastP.y * this.canvas.height);
+    this.ctx.lineTo(pos.x, pos.y);
+    this.ctx.stroke();
+    this.ctx.setLineDash([]);
+  }
+
+  _handleTouchEnd(e) {
+    if (this.mode === 'idle') return;
+    e.preventDefault();
+    const pos = this._getTouchPos(e);
+
+    // Simulate a click at the touch position
+    const normX = Math.max(0, Math.min(1, pos.x / this.canvas.width));
+    const normY = Math.max(0, Math.min(1, pos.y / this.canvas.height));
+    this._addPoint(normX, normY, pos.x, pos.y);
   }
 
   startDrawLine(callback) {
@@ -33,7 +84,7 @@ class CanvasEditor {
     this.points = [];
     this.onShapeCreated = callback;
     this.canvas.classList.add('interactive');
-    this._updateInstructions('Click 2 points on the camera to set the tripwire line.');
+    this._updateInstructions('Tap 2 points on the camera to set the tripwire line.');
   }
 
   startDrawZone(callback) {
@@ -41,7 +92,7 @@ class CanvasEditor {
     this.points = [];
     this.onShapeCreated = callback;
     this.canvas.classList.add('interactive');
-    this._updateInstructions('Click 3 or 4 points to define polygon zone, then double-click to finish.');
+    this._updateInstructions('Tap 3-4 points to define polygon zone, then double-tap to finish.');
   }
 
   cancelDrawing() {
@@ -74,7 +125,11 @@ class CanvasEditor {
     const normX = Math.max(0, Math.min(1, x / this.canvas.width));
     const normY = Math.max(0, Math.min(1, y / this.canvas.height));
 
-    this.points.push({ x: normX, y: normY, px: x, py: y });
+    this._addPoint(normX, normY, x, y);
+  }
+
+  _addPoint(normX, normY, px, py) {
+    this.points.push({ x: normX, y: normY, px, py });
 
     if (this.mode === 'draw_line' && this.points.length === 2) {
       const lineData = {
@@ -140,8 +195,8 @@ class CanvasEditor {
         if (i === 0) this.ctx.moveTo(px, py);
         else this.ctx.lineTo(px, py);
 
-        // Point circle
-        this.ctx.arc(px, py, 4, 0, Math.PI * 2);
+        // Point circle (larger on touch devices)
+        this.ctx.arc(px, py, 6, 0, Math.PI * 2);
       }
       this.ctx.stroke();
       if (this.mode === 'draw_zone' && this.points.length > 2) {

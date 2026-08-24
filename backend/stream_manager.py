@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Any
 from backend.config import CameraConfig, TripwireLine, OccupancyZone, Point
 from backend.database import db
 from backend.camera_stream import CameraStream
+from backend.browser_stream import BrowserCameraProcessor
 
 logger = logging.getLogger("camcounter.manager")
 
@@ -15,6 +16,7 @@ IS_CLOUD = bool(os.environ.get("RENDER") or os.environ.get("DYNO") or os.environ
 class StreamManager:
     def __init__(self):
         self.streams: Dict[str, CameraStream] = {}
+        self.browser_processors: Dict[str, BrowserCameraProcessor] = {}
         self.active_camera_id: Optional[str] = None
         self._init_cameras()
 
@@ -71,7 +73,7 @@ class StreamManager:
                 source_type="synthetic",
                 source_url="demo",
                 enabled=True,
-                target_fps=15 if IS_CLOUD else 25,  # Lower FPS on cloud to save CPU
+                target_fps=15 if IS_CLOUD else 25,
                 lines=[
                     TripwireLine(
                         id="line_entrance",
@@ -116,9 +118,10 @@ class StreamManager:
             saved_cameras = cameras_to_create
 
         for cam_cfg in saved_cameras:
-            # Skip webcam streams on cloud (even if previously saved in DB)
             if IS_CLOUD and cam_cfg.source_type == "webcam":
                 logger.info(f"Skipping webcam stream '{cam_cfg.name}' on cloud environment.")
+                continue
+            if cam_cfg.source_type == "browser":
                 continue
             if cam_cfg.enabled:
                 self.start_stream(cam_cfg)
@@ -127,6 +130,8 @@ class StreamManager:
             self.active_camera_id = saved_cameras[0].id
 
     def start_stream(self, config: CameraConfig):
+        if config.source_type == "browser":
+            return
         if config.id in self.streams:
             self.streams[config.id].stop()
         stream = CameraStream(config)
@@ -138,9 +143,26 @@ class StreamManager:
         if camera_id in self.streams:
             self.streams[camera_id].stop()
             del self.streams[camera_id]
+        if camera_id in self.browser_processors:
+            del self.browser_processors[camera_id]
+
+    def get_or_create_browser_processor(self, camera_id: str) -> Optional[BrowserCameraProcessor]:
+        """Get or create a BrowserCameraProcessor for a browser-type camera."""
+        if camera_id in self.browser_processors:
+            return self.browser_processors[camera_id]
+        cam_config = db.get_camera(camera_id)
+        if cam_config and cam_config.source_type == "browser":
+            proc = BrowserCameraProcessor(cam_config)
+            self.browser_processors[camera_id] = proc
+            return proc
+        return None
 
     def add_or_update_camera(self, config: CameraConfig) -> CameraConfig:
         db.save_camera(config)
+        if config.source_type == "browser":
+            if config.id in self.browser_processors:
+                self.browser_processors[config.id].update_config(config)
+            return config
         if config.enabled:
             if config.id in self.streams:
                 self.streams[config.id].update_config(config)
@@ -154,7 +176,7 @@ class StreamManager:
         self.stop_stream(camera_id)
         db.delete_camera(camera_id)
         if self.active_camera_id == camera_id:
-            remaining = list(self.streams.keys())
+            remaining = list(self.streams.keys()) + list(self.browser_processors.keys())
             self.active_camera_id = remaining[0] if remaining else None
 
     def get_stream(self, camera_id: str) -> Optional[CameraStream]:
@@ -164,12 +186,15 @@ class StreamManager:
         result = {}
         for cam_id, stream in self.streams.items():
             result[cam_id] = stream.get_analytics()
+        for cam_id, proc in self.browser_processors.items():
+            result[cam_id] = proc.get_analytics()
         return result
 
     def shutdown(self):
         for stream in self.streams.values():
             stream.stop()
         self.streams.clear()
+        self.browser_processors.clear()
 
 
 # Global Manager Instance

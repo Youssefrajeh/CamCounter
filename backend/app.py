@@ -259,6 +259,57 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
 
 
+@app.websocket("/ws/browser-cam/{camera_id}")
+async def browser_camera_ws(websocket: WebSocket, camera_id: str):
+    """
+    WebSocket endpoint for browser-based camera (phone camera via getUserMedia).
+    Receives base64 JPEG frames, runs AI detection, returns annotated frames + analytics.
+    """
+    await websocket.accept()
+    logger.info(f"Browser camera WebSocket connected for camera '{camera_id}'")
+
+    processor = stream_manager.get_or_create_browser_processor(camera_id)
+    if not processor:
+        await websocket.send_text(json.dumps({"type": "error", "message": "Camera not found or not a browser camera"}))
+        await websocket.close()
+        return
+
+    import base64
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                if msg.get("type") == "frame":
+                    # Decode base64 JPEG frame
+                    frame_b64 = msg.get("data", "")
+                    # Strip data URL prefix if present
+                    if "," in frame_b64:
+                        frame_b64 = frame_b64.split(",", 1)[1]
+                    frame_bytes = base64.b64decode(frame_b64)
+
+                    # Process through AI pipeline (runs in thread to not block event loop)
+                    import asyncio
+                    annotated_jpeg, analytics = await asyncio.get_event_loop().run_in_executor(
+                        None, processor.process_frame, frame_bytes
+                    )
+
+                    # Send back annotated frame + analytics
+                    response = {"type": "result", "analytics": analytics}
+                    if annotated_jpeg:
+                        response["frame"] = "data:image/jpeg;base64," + base64.b64encode(annotated_jpeg).decode("ascii")
+
+                    await websocket.send_text(json.dumps(response))
+
+                elif msg.get("action") == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+
+            except Exception as e:
+                logger.error(f"Error processing browser camera frame: {e}")
+    except WebSocketDisconnect:
+        logger.info(f"Browser camera WebSocket disconnected for camera '{camera_id}'")
+
+
 # Mount Static Frontend
 FRONTEND_DIR = BASE_DIR / "frontend"
 if FRONTEND_DIR.exists():
