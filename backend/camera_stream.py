@@ -32,7 +32,7 @@ class SyntheticStreamGenerator:
     Generates a realistic synthetic camera feed with walking people personas
     for immediate testing without physical camera hardware.
     """
-    def __init__(self, width: int = 1280, height: int = 720, num_people: int = 4):
+    def __init__(self, width: int = 640, height: int = 360, num_people: int = 4):
         self.width = width
         self.height = height
         self.people = []

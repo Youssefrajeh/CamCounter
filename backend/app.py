@@ -1,10 +1,20 @@
 import os
+# Configure thread and memory limits before importing heavy libraries
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("TORCH_NUM_THREADS", "1")
+os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "65536")
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+
 import io
 import csv
 import json
 import uuid
 import asyncio
 import logging
+import gc
+import ctypes
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
@@ -28,10 +38,30 @@ async def lifespan(app: FastAPI):
     logger.info("Starting CamCounter Server...")
     # Background task for broadcasting live stats via WebSocket
     broadcaster = asyncio.create_task(websocket_telemetry_broadcaster())
+    memory_cleaner = asyncio.create_task(periodic_memory_cleaner())
     yield
     logger.info("Shutting down CamCounter Server...")
     broadcaster.cancel()
+    memory_cleaner.cancel()
     stream_manager.shutdown()
+
+
+async def periodic_memory_cleaner():
+    """Periodically free unused memory and trim heap allocations."""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            gc.collect()
+            if os.name == 'posix':
+                try:
+                    libc = ctypes.CDLL('libc.so.6')
+                    libc.malloc_trim(0)
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
 
 
 app = FastAPI(title="AI People Counter & Surveillance Analytics", version="1.0.0", lifespan=lifespan)

@@ -1,9 +1,34 @@
 import logging
+import gc
+import os
+import ctypes
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 import torch
 
+# Limit PyTorch CPU thread pool to save memory and avoid thread stack explosion
+torch.set_num_threads(1)
+if hasattr(torch, 'set_num_interop_threads'):
+    try:
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
+
 logger = logging.getLogger("camcounter.detector")
+
+# Global singleton model cache so all cameras share ONE instance in RAM
+_SHARED_MODELS: Dict[str, Any] = {}
+
+
+def _trim_memory():
+    """Trigger Python GC and glibc malloc_trim to release unused memory back to the OS."""
+    gc.collect()
+    try:
+        if os.name == 'posix':
+            libc = ctypes.CDLL('libc.so.6')
+            libc.malloc_trim(0)
+    except Exception:
+        pass
 
 
 class PersonDetector:
@@ -11,53 +36,61 @@ class PersonDetector:
         self.model_name = model_name
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
-        self.model = None
-        # Force CPU on cloud (no CUDA available) to save memory
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        # NOTE: Model is NOT loaded here — lazy-loaded on first detect_and_track()
+        self._inference_count = 0
 
-    def _load_model(self):
-        """Lazy-loads the YOLO model on first use to reduce startup memory."""
-        if self.model is not None:
-            return  # Already loaded
+    @property
+    def model(self):
+        if self.model_name not in _SHARED_MODELS:
+            self._load_shared_model()
+        return _SHARED_MODELS.get(self.model_name)
+
+    def _load_shared_model(self):
+        """Loads and caches the single shared YOLO model instance."""
+        global _SHARED_MODELS
+        if self.model_name in _SHARED_MODELS:
+            return
         try:
-            logger.info(f"Lazy-loading YOLO model '{self.model_name}' on device '{self.device}'...")
+            logger.info(f"Loading shared YOLO model '{self.model_name}' on device '{self.device}'...")
             from ultralytics import YOLO
-            self.model = YOLO(self.model_name)
-            # Warmup inference with a small frame
+            loaded_model = YOLO(self.model_name)
+            # Warmup with small 320x320 frame
             dummy = np.zeros((320, 320, 3), dtype=np.uint8)
-            self.model(dummy, verbose=False, device=self.device)
-            logger.info(f"YOLO model '{self.model_name}' loaded successfully on {self.device}.")
+            with torch.inference_mode():
+                loaded_model(dummy, verbose=False, device=self.device, imgsz=320)
+            _SHARED_MODELS[self.model_name] = loaded_model
+            _trim_memory()
+            logger.info(f"Shared YOLO model '{self.model_name}' loaded successfully into cache.")
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
-            self.model = None
 
     def detect_and_track(self, frame: np.ndarray, persist: bool = True) -> List[Tuple[int, Tuple[float, float, float, float], float]]:
         """
-        Runs person detection and tracking on an RGB/BGR image frame.
+        Runs person detection and tracking on an RGB/BGR image frame using low-memory inference (imgsz=320, inference_mode).
         Returns a list of tuples: (track_id, (norm_x1, norm_y1, norm_x2, norm_y2), confidence)
         """
-        if self.model is None:
-            self._load_model()
-            if self.model is None:
-                return []
+        m = self.model
+        if m is None:
+            return []
 
         h, w = frame.shape[:2]
         if h == 0 or w == 0:
             return []
 
         try:
-            # Run tracking with class 0 (person only)
-            results = self.model.track(
-                source=frame,
-                persist=persist,
-                classes=[0],  # Person class only in COCO dataset
-                conf=self.conf_threshold,
-                iou=self.iou_threshold,
-                tracker="bytetrack.yaml",
-                verbose=False,
-                device=self.device
-            )
+            with torch.inference_mode():
+                results = m.track(
+                    source=frame,
+                    persist=persist,
+                    classes=[0],  # Person class only
+                    conf=self.conf_threshold,
+                    iou=self.iou_threshold,
+                    imgsz=320,    # 320x320 inference keeps memory <180MB
+                    half=False,
+                    tracker="bytetrack.yaml",
+                    verbose=False,
+                    device=self.device
+                )
 
             detections = []
             if results and len(results) > 0:
@@ -66,7 +99,6 @@ class PersonDetector:
                     boxes = res.boxes.xyxy.cpu().numpy()
                     confs = res.boxes.conf.cpu().numpy() if res.boxes.conf is not None else [1.0] * len(boxes)
                     
-                    # Track IDs (might be None if tracker hasn't assigned yet)
                     if res.boxes.id is not None:
                         ids = res.boxes.id.int().cpu().numpy()
                     else:
@@ -75,13 +107,17 @@ class PersonDetector:
                     for i, box in enumerate(boxes):
                         track_id = int(ids[i])
                         conf = float(confs[i])
-                        # Normalize coordinates to 0.0 - 1.0 range
                         nx1 = max(0.0, min(1.0, float(box[0]) / w))
                         ny1 = max(0.0, min(1.0, float(box[1]) / h))
                         nx2 = max(0.0, min(1.0, float(box[2]) / w))
                         ny2 = max(0.0, min(1.0, float(box[3]) / h))
 
                         detections.append((track_id, (nx1, ny1, nx2, ny2), conf))
+
+            # Periodic memory trimming every 100 frames to prevent RAM creep
+            self._inference_count += 1
+            if self._inference_count % 100 == 0:
+                _trim_memory()
 
             return detections
         except Exception as e:
