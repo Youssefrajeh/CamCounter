@@ -12,17 +12,21 @@ class PersonDetector:
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.model = None
+        # Force CPU on cloud (no CUDA available) to save memory
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._load_model()
+        # NOTE: Model is NOT loaded here — lazy-loaded on first detect_and_track()
 
     def _load_model(self):
+        """Lazy-loads the YOLO model on first use to reduce startup memory."""
+        if self.model is not None:
+            return  # Already loaded
         try:
-            logger.info(f"Loading YOLO model '{self.model_name}' on device '{self.device}'...")
+            logger.info(f"Lazy-loading YOLO model '{self.model_name}' on device '{self.device}'...")
             from ultralytics import YOLO
             self.model = YOLO(self.model_name)
-            # Warmup inference
+            # Warmup inference with a small frame
             dummy = np.zeros((320, 320, 3), dtype=np.uint8)
-            self.model(dummy, verbose=False)
+            self.model(dummy, verbose=False, device=self.device)
             logger.info(f"YOLO model '{self.model_name}' loaded successfully on {self.device}.")
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")

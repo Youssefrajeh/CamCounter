@@ -1,11 +1,15 @@
 import logging
 import asyncio
+import os
 from typing import Dict, List, Optional, Any
 from backend.config import CameraConfig, TripwireLine, OccupancyZone, Point
 from backend.database import db
 from backend.camera_stream import CameraStream
 
 logger = logging.getLogger("camcounter.manager")
+
+# Detect if running on a cloud platform (Render, Heroku, Railway, etc.)
+IS_CLOUD = bool(os.environ.get("RENDER") or os.environ.get("DYNO") or os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("IS_CLOUD"))
 
 
 class StreamManager:
@@ -17,51 +21,57 @@ class StreamManager:
     def _init_cameras(self):
         saved_cameras = db.get_all_cameras()
         if not saved_cameras:
-            # Default 1: Laptop / Integrated Webcam
-            webcam_cam = CameraConfig(
-                id="laptop_webcam_0",
-                name="Laptop / USB Webcam (Dev 0)",
-                source_type="webcam",
-                source_url="0",
-                enabled=True,
-                target_fps=25,
-                lines=[
-                    TripwireLine(
-                        id="line_webcam_cross",
-                        name="Room Entrance",
-                        p1=Point(x=0.15, y=0.5),
-                        p2=Point(x=0.85, y=0.5),
-                        in_label="IN",
-                        out_label="OUT",
-                        color="#10B981"
-                    )
-                ],
-                zones=[
-                    OccupancyZone(
-                        id="zone_room",
-                        name="Desk / Room Zone",
-                        points=[
-                            Point(x=0.1, y=0.2),
-                            Point(x=0.9, y=0.2),
-                            Point(x=0.9, y=0.9),
-                            Point(x=0.1, y=0.9)
-                        ],
-                        max_capacity=5,
-                        color="#3B82F6"
-                    )
-                ],
-                alert_max_occupancy=5,
-                alert_enabled=True
-            )
+            cameras_to_create = []
 
-            # Default 2: Simulated Demo Stream
+            # Only add webcam on local environments (cloud servers don't have USB cameras)
+            if not IS_CLOUD:
+                webcam_cam = CameraConfig(
+                    id="laptop_webcam_0",
+                    name="Laptop / USB Webcam (Dev 0)",
+                    source_type="webcam",
+                    source_url="0",
+                    enabled=True,
+                    target_fps=25,
+                    lines=[
+                        TripwireLine(
+                            id="line_webcam_cross",
+                            name="Room Entrance",
+                            p1=Point(x=0.15, y=0.5),
+                            p2=Point(x=0.85, y=0.5),
+                            in_label="IN",
+                            out_label="OUT",
+                            color="#10B981"
+                        )
+                    ],
+                    zones=[
+                        OccupancyZone(
+                            id="zone_room",
+                            name="Desk / Room Zone",
+                            points=[
+                                Point(x=0.1, y=0.2),
+                                Point(x=0.9, y=0.2),
+                                Point(x=0.9, y=0.9),
+                                Point(x=0.1, y=0.9)
+                            ],
+                            max_capacity=5,
+                            color="#3B82F6"
+                        )
+                    ],
+                    alert_max_occupancy=5,
+                    alert_enabled=True
+                )
+                cameras_to_create.append(webcam_cam)
+            else:
+                logger.info("Cloud environment detected — skipping webcam default camera.")
+
+            # Simulated Demo Stream (always available)
             demo_cam = CameraConfig(
                 id="demo_cam_1",
                 name="Surveillance Corridor (Demo)",
                 source_type="synthetic",
                 source_url="demo",
                 enabled=True,
-                target_fps=25,
+                target_fps=15 if IS_CLOUD else 25,  # Lower FPS on cloud to save CPU
                 lines=[
                     TripwireLine(
                         id="line_entrance",
@@ -99,11 +109,17 @@ class StreamManager:
                 alert_max_occupancy=6,
                 alert_enabled=True
             )
-            db.save_camera(webcam_cam)
-            db.save_camera(demo_cam)
-            saved_cameras = [webcam_cam, demo_cam]
+            cameras_to_create.append(demo_cam)
+
+            for cam in cameras_to_create:
+                db.save_camera(cam)
+            saved_cameras = cameras_to_create
 
         for cam_cfg in saved_cameras:
+            # Skip webcam streams on cloud (even if previously saved in DB)
+            if IS_CLOUD and cam_cfg.source_type == "webcam":
+                logger.info(f"Skipping webcam stream '{cam_cfg.name}' on cloud environment.")
+                continue
             if cam_cfg.enabled:
                 self.start_stream(cam_cfg)
 

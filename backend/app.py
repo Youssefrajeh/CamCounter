@@ -156,12 +156,13 @@ async def video_stream(camera_id: str):
         raise HTTPException(status_code=404, detail="Camera stream not found or inactive")
 
     def frame_generator():
+        import time as _time
         while stream.running:
             jpeg_bytes = stream.get_latest_jpeg()
             if jpeg_bytes is not None:
                 yield (b"--frame\r\n"
                        b"Content-Type: image/jpeg\r\n\r\n" + jpeg_bytes + b"\r\n")
-            asyncio.sleep(0.04)
+            _time.sleep(0.04)
 
     return StreamingResponse(
         frame_generator(),
