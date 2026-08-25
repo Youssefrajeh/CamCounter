@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/styles.css?v=2.2">
   <!-- Chart.js for live metrics -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -37,7 +37,15 @@
       <div class="sidebar-section">
         <div class="section-title">
           <span>Connected Cameras</span>
-          <span id="camera-count-badge">0 Feeds</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="camera-count-badge">0 Feeds</span>
+            <button class="btn btn-secondary btn-sm btn-icon-only btn-trigger-add-cam" id="btn-quick-add-camera" title="Add Camera Feed">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="camera-list" id="camera-list-container">
           <!-- Dynamic camera cards populated here -->
@@ -45,7 +53,7 @@
       </div>
 
       <div class="sidebar-actions">
-        <button class="btn btn-primary" id="btn-open-add-camera">
+        <button class="btn btn-primary btn-trigger-add-cam" id="btn-open-add-camera">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"></line>
             <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -77,6 +85,13 @@
         </div>
 
         <div class="nav-actions">
+          <button class="btn btn-primary btn-sm btn-trigger-add-cam" id="btn-top-add-camera" title="Add Camera Feed">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span class="btn-text">Add Camera</span>
+          </button>
           <button class="btn btn-secondary btn-sm" id="btn-export-csv" title="Export Count Logs to CSV">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
