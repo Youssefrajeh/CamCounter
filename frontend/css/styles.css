@@ -228,6 +228,7 @@ body {
 .sidebar-actions {
   padding: 16px;
   border-top: 1px solid var(--border-color);
+  flex-shrink: 0; /* Never collapse — always show the Add Camera button */
 }
 
 .btn {
@@ -855,11 +856,13 @@ body {
     position: fixed;
     top: 0;
     left: 0;
-    height: 100vh;
+    height: 100vh; /* fallback for older browsers */
+    height: 100dvh; /* dvh accounts for mobile browser chrome (address bar) */
     width: min(var(--sidebar-width), 85vw);
     transform: translateX(-100%);
     z-index: 50;
     box-shadow: 4px 0 30px rgba(0, 0, 0, 0.5);
+    overflow: hidden; /* prevent sidebar itself from scrolling; only camera-list scrolls */
   }
 
   .sidebar.open {
