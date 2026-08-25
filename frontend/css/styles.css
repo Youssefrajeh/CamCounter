@@ -984,30 +984,58 @@ body {
   }
 
   .dashboard-body {
-    padding: 12px;
-    gap: 16px;
+    padding: 10px;
+    gap: 10px;
   }
 
-  /* KPI grid: 2 columns on mobile */
+  /* KPI: compact horizontal scrollable strip on mobile */
   .kpi-grid {
-    grid-template-columns: 1fr 1fr;
+    display: flex;
+    overflow-x: auto;
     gap: 8px;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+  }
+
+  .kpi-grid::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
   }
 
   .kpi-card {
-    padding: 12px 14px;
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    gap: 2px;
+    flex-direction: row;
+    align-items: center;
+    min-width: 0;
+    border-radius: 10px;
   }
 
-  .kpi-value {
-    font-size: 1.5rem;
+  /* Hide the decorative glow blob on mobile */
+  .kpi-card::after {
+    display: none;
   }
 
   .kpi-label {
-    font-size: 0.7rem;
+    font-size: 0.65rem;
+    white-space: nowrap;
   }
 
+  /* Hide the icon inside the label on mobile */
+  .kpi-icon {
+    display: none;
+  }
+
+  .kpi-value {
+    font-size: 1.1rem;
+    line-height: 1;
+    margin-left: 6px;
+  }
+
+  /* Hide footer description on mobile — the label is enough */
   .kpi-footer {
-    font-size: 0.65rem;
+    display: none;
   }
 
   /* Video section */
@@ -1109,18 +1137,17 @@ body {
 
 /* Small Mobile (≤480px) */
 @media (max-width: 480px) {
-  .kpi-grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
+  .kpi-card {
+    padding: 6px 10px;
   }
 
   .kpi-value {
-    font-size: 1.3rem;
+    font-size: 1rem;
+    margin-left: 4px;
   }
 
-  .kpi-card {
-    padding: 10px 12px;
-    gap: 4px;
+  .kpi-label {
+    font-size: 0.6rem;
   }
 
   .active-cam-heading h2 {
