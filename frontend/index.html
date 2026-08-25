@@ -103,6 +103,28 @@
 
       <!-- Dashboard Body -->
       <div class="dashboard-body">
+        <!-- Mobile Camera Auto-Detect Banner (hidden by default, shown via JS) -->
+        <div class="mobile-cam-banner" id="mobile-cam-banner" style="display: none;">
+          <div class="mobile-cam-banner-content">
+            <div class="mobile-cam-banner-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 7l-7 5 7 5V7z"></path>
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+              </svg>
+            </div>
+            <div class="mobile-cam-banner-text">
+              <strong>📱 Phone Camera Detected</strong>
+              <span>Tap to start live AI people counting with your camera</span>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-mobile-cam" id="btn-auto-start-cam">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            Start Camera
+          </button>
+        </div>
+
         <!-- KPI Metric Cards Grid -->
         <section class="kpi-grid">
           <div class="kpi-card card-occupancy">

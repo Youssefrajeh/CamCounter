@@ -12,9 +12,129 @@ document.addEventListener('DOMContentLoaded', () => {
   editor = new window.CanvasEditor('interactive-editor-canvas', 'stream-viewport-container');
 
   setupEventListeners();
-  loadCameras();
+  loadCameras().then(() => {
+    detectPhoneCamera();
+  });
   connectWebSocket();
 });
+
+// =============================================
+// Phone Camera Auto-Detection
+// =============================================
+
+/**
+ * Detects if the device has a camera available and shows a one-tap
+ * banner to start streaming, so users don't have to manually add a
+ * browser camera through the modal.
+ */
+async function detectPhoneCamera() {
+  try {
+    // Skip if not a secure context (getUserMedia won't work anyway)
+    if (!window.isSecureContext) return;
+
+    // Skip if getUserMedia is not supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+
+    // Skip if there's already a browser-type camera configured
+    const hasBrowserCam = allCameras.some(c => c.source_type === 'browser');
+    if (hasBrowserCam) return;
+
+    // Check if the device actually has a camera
+    // enumerateDevices may require permission on some browsers, but on most
+    // it returns device kinds without labels (which is enough for detection)
+    let hasCamera = false;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      hasCamera = devices.some(d => d.kind === 'videoinput');
+    } catch {
+      // If enumerateDevices fails, assume camera might be available on
+      // touch-capable devices (phones/tablets)
+      hasCamera = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    }
+
+    if (!hasCamera) return;
+
+    // Show the auto-detect banner
+    const banner = document.getElementById('mobile-cam-banner');
+    banner.style.display = 'flex';
+
+    // Wire up the one-tap start button
+    document.getElementById('btn-auto-start-cam').addEventListener('click', async () => {
+      await autoStartPhoneCamera();
+    }, { once: true });
+
+  } catch (err) {
+    console.warn('Phone camera auto-detection failed:', err);
+  }
+}
+
+/**
+ * Auto-creates a browser camera feed and starts streaming — one tap, no modal.
+ */
+async function autoStartPhoneCamera() {
+  const banner = document.getElementById('mobile-cam-banner');
+  const btn = document.getElementById('btn-auto-start-cam');
+
+  // Show loading state
+  btn.disabled = true;
+  btn.innerHTML = `
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin-icon">
+      <circle cx="12" cy="12" r="10" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+    </svg>
+    Starting...
+  `;
+
+  try {
+    // Determine preferred facing mode: back camera for counting, front as fallback
+    let facingMode = 'environment';
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter(d => d.kind === 'videoinput');
+      // If only one camera (e.g., a laptop), just use it
+      if (cameras.length === 1) facingMode = 'user';
+    } catch { /* use default */ }
+
+    // Create the camera on the backend
+    const payload = {
+      id: 'phone_cam_' + Date.now().toString(36),
+      name: 'Phone Camera',
+      source_type: 'browser',
+      source_url: facingMode,
+      enabled: true,
+      alert_max_occupancy: 20,
+      lines: [],
+      zones: []
+    };
+
+    const res = await fetch('/api/cameras', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const saved = await res.json();
+
+    // Hide the banner
+    banner.style.display = 'none';
+
+    // Reload cameras and select the new one
+    await loadCameras();
+    selectCamera(saved.id);
+
+  } catch (err) {
+    console.error('Failed to auto-start phone camera:', err);
+    btn.disabled = false;
+    btn.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+      </svg>
+      Retry
+    `;
+    // Re-attach the click handler for retry
+    btn.addEventListener('click', async () => {
+      await autoStartPhoneCamera();
+    }, { once: true });
+  }
+}
 
 // =============================================
 // Browser Camera Stream (Phone Camera)
