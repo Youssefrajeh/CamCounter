@@ -57,7 +57,7 @@ class OccupancyZone(BaseModel):
 class CameraConfig(BaseModel):
     id: str
     name: str
-    source_type: str = "webcam"  # "webcam", "rtsp", "http", "file", "synthetic"
+    source_type: str = "webcam"  # "webcam", "browser", "rtsp", "http", "file", "synthetic"
     source_url: str = "0"        # Device index "0", RTSP URL, or file path
     enabled: bool = True
     target_fps: int = 25

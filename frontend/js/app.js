@@ -36,34 +36,116 @@ class BrowserCameraStream {
 
   async start() {
     try {
-      // Request camera access
-      const constraints = {
-        video: {
-          facingMode: this.facingMode,
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        },
-        audio: false
-      };
+      // Check for secure context (getUserMedia requires HTTPS on mobile)
+      if (!window.isSecureContext) {
+        const msg = 'Camera access requires a secure connection (HTTPS). ' +
+          'You are currently on an insecure connection. ' +
+          'Please access this page via HTTPS or localhost.';
+        console.error(msg);
+        alert(msg);
+        throw new Error(msg);
+      }
 
-      this.mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      // Check for getUserMedia support
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const msg = 'Your browser does not support camera access (getUserMedia). ' +
+          'Please use a modern browser like Chrome, Safari, or Firefox.';
+        console.error(msg);
+        alert(msg);
+        throw new Error(msg);
+      }
+
+      // Request camera access with ideal facingMode (not exact) to prevent
+      // OverconstrainedError on devices that can't satisfy the exact mode.
+      // Falls back to any available camera if the preferred one isn't available.
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: this.facingMode },
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          },
+          audio: false
+        });
+      } catch (firstErr) {
+        console.warn(`Camera with facingMode '${this.facingMode}' failed: ${firstErr.message}. Trying any camera...`);
+        // Fallback: request any available camera without facingMode constraint
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 }
+            },
+            audio: false
+          });
+        } catch (fallbackErr) {
+          console.error('All camera access attempts failed:', fallbackErr);
+          if (fallbackErr.name === 'NotAllowedError') {
+            alert('Camera permission was denied. Please allow camera access in your browser settings and try again.');
+          } else if (fallbackErr.name === 'NotFoundError') {
+            alert('No camera found on this device. Please ensure a camera is available.');
+          } else {
+            alert('Could not access the camera: ' + fallbackErr.message);
+          }
+          throw fallbackErr;
+        }
+      }
+
+      this.mediaStream = stream;
       this.video.srcObject = this.mediaStream;
-      await this.video.play();
+      this.video.setAttribute('playsinline', 'true'); // Required for iOS Safari
+      this.video.setAttribute('autoplay', 'true');
+      this.video.muted = true;
 
-      // Set canvas to match video dimensions
-      this.video.addEventListener('loadedmetadata', () => {
-        this.captureCanvas.width = this.video.videoWidth;
-        this.captureCanvas.height = this.video.videoHeight;
+      // Play the video - wrapped in user gesture handling for mobile
+      try {
+        await this.video.play();
+      } catch (playErr) {
+        console.warn('Auto-play failed, retrying:', playErr);
+        // On some mobile browsers, play() requires a user gesture
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await this.video.play();
+      }
+
+      // Wait for video to actually have dimensions (not just loadeddata)
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          // After 5 seconds, proceed with whatever we have
+          console.warn('Timed out waiting for video dimensions, using defaults');
+          resolve();
+        }, 5000);
+
+        const checkDimensions = () => {
+          if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        };
+
+        // Check immediately
+        checkDimensions();
+        // Also listen for metadata/data events
+        this.video.addEventListener('loadedmetadata', checkDimensions, { once: true });
+        this.video.addEventListener('loadeddata', checkDimensions, { once: true });
+        // Poll as a final fallback
+        const poll = setInterval(() => {
+          if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
+            clearInterval(poll);
+            clearTimeout(timeout);
+            resolve();
+          }
+        }, 100);
+        // Clear poll on timeout too
+        setTimeout(() => clearInterval(poll), 5100);
       });
 
-      // Wait for video to be ready
-      await new Promise(resolve => {
-        if (this.video.readyState >= 2) resolve();
-        else this.video.addEventListener('loadeddata', resolve, { once: true });
-      });
-
-      this.captureCanvas.width = this.video.videoWidth || 640;
-      this.captureCanvas.height = this.video.videoHeight || 480;
+      // Set canvas to match actual video dimensions
+      const vw = this.video.videoWidth || 640;
+      const vh = this.video.videoHeight || 480;
+      this.captureCanvas.width = vw;
+      this.captureCanvas.height = vh;
+      console.log(`Browser camera ready: ${vw}x${vh}, facingMode=${this.facingMode}`);
 
       // Open WebSocket to backend
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -108,7 +190,12 @@ class BrowserCameraStream {
 
     } catch (err) {
       console.error('Failed to start browser camera:', err);
-      alert('Could not access the camera. Please ensure camera permissions are granted and you are using HTTPS.');
+      // Clean up any partially acquired resources
+      if (this.mediaStream) {
+        this.mediaStream.getTracks().forEach(t => t.stop());
+        this.mediaStream = null;
+      }
+      this.video.srcObject = null;
       throw err;
     }
   }
