@@ -23,3 +23,9 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
     healthCheckPath: /api/cameras
+    disk:
+      name: camcounter-data
+      # Matches DATA_DIR in backend/config.py (BASE_DIR/data) -- without this,
+      # data/camcounter.db (cameras, counts, alerts) is wiped on every deploy.
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

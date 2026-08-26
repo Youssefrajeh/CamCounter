@@ -51,6 +51,21 @@ function hideBackendError() {
   if (banner) banner.style.display = 'none';
 }
 
+/**
+ * Races a promise against a timeout so a hung browser API (e.g. a camera
+ * permission prompt that never resolves or rejects) fails loudly instead of
+ * leaving the UI stuck silently forever.
+ */
+function withTimeout(promise, ms, timeoutMessage) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
   window.ChartsManager.initCharts();
@@ -266,24 +281,36 @@ class BrowserCameraStream {
         ? { deviceId: { exact: this.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
         : { facingMode: { ideal: this.facingMode }, width: { ideal: 640 }, height: { ideal: 480 } };
 
+      // getUserMedia's returned promise can hang indefinitely if the
+      // permission prompt gets stuck (blocked by browser/OS policy,
+      // dismissed without a proper reject, camera locked by another app,
+      // etc.) -- race it against a timeout so that shows up as a clear
+      // error instead of a silently-stuck "Starting camera..." forever.
+      const GUM_TIMEOUT_MS = 15000;
+      const GUM_TIMEOUT_MSG = "Camera permission prompt didn't respond in time. " +
+        "Check your browser's address bar for a blocked-camera icon, make sure no " +
+        "other app or tab is using the camera, then try again.";
+
       let stream = null;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: primaryConstraint,
-          audio: false
-        });
+        stream = await withTimeout(
+          navigator.mediaDevices.getUserMedia({ video: primaryConstraint, audio: false }),
+          GUM_TIMEOUT_MS,
+          GUM_TIMEOUT_MSG
+        );
       } catch (firstErr) {
         const target = this.deviceId ? `device '${this.deviceId}'` : `facingMode '${this.facingMode}'`;
         console.warn(`Camera with ${target} failed: ${firstErr.message}. Trying any camera...`);
         // Fallback: request any available camera without facingMode constraint
         try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 640 },
-              height: { ideal: 480 }
-            },
-            audio: false
-          });
+          stream = await withTimeout(
+            navigator.mediaDevices.getUserMedia({
+              video: { width: { ideal: 640 }, height: { ideal: 480 } },
+              audio: false
+            }),
+            GUM_TIMEOUT_MS,
+            GUM_TIMEOUT_MSG
+          );
         } catch (fallbackErr) {
           console.error('All camera access attempts failed:', fallbackErr);
           if (fallbackErr.name === 'NotAllowedError') {

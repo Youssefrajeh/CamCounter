@@ -86,7 +86,6 @@ class PersonDetector:
                     conf=self.conf_threshold,
                     iou=self.iou_threshold,
                     imgsz=320,    # 320x320 inference keeps memory <180MB
-                    half=False,
                     tracker="bytetrack.yaml",
                     verbose=False,
                     device=self.device
