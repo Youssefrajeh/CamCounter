@@ -656,25 +656,6 @@ function renderCameraList() {
     `;
     container.appendChild(card);
   });
-
-  // Always append an inline "Add Camera Feed" card inside the scrollable camera list
-  const addCard = document.createElement('div');
-  addCard.className = 'camera-card camera-card-add';
-  addCard.innerHTML = `
-    <div style="display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 600; color: var(--accent-green); padding: 4px 0;">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <line x1="12" y1="5" x2="12" y2="19"></line>
-        <line x1="5" y1="12" x2="19" y2="12"></line>
-      </svg>
-      Add Camera Feed
-    </div>
-  `;
-  addCard.onclick = () => {
-    document.getElementById('modal-add-camera').classList.add('open');
-    document.getElementById('sidebar').classList.remove('open');
-    document.getElementById('sidebar-overlay').classList.remove('open');
-  };
-  container.appendChild(addCard);
 }
 
 // Switch active camera
