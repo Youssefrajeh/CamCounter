@@ -269,7 +269,7 @@ class BrowserCameraStream {
 
       // Open WebSocket to backend
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/browser-cam/${this.cameraId}`;
+      const wsUrl = `${protocol}//${window.location.host}/ws/browser-cam/${encodeURIComponent(this.cameraId)}`;
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
@@ -487,14 +487,28 @@ function setupEventListeners() {
         const formData = new FormData();
         formData.append('file', fileInput.files[0]);
         formData.append('name', name);
+        let newCam;
         try {
-          const res = await fetch('/api/cameras/upload-video', { method: 'POST', body: formData });
-          const newCam = await res.json();
+          const uploadUrl = new URL('/api/cameras/upload-video', window.location.href).toString();
+          const res = await fetch(uploadUrl, { method: 'POST', body: formData });
+          if (!res.ok) {
+            const bodyText = await res.text().catch(() => '');
+            throw new Error(`Server rejected the upload (${res.status}): ${bodyText.slice(0, 200) || res.statusText}`);
+          }
+          newCam = await res.json();
+        } catch (err) {
+          console.error('Failed to upload video camera:', err);
+          alert('Error uploading video: ' + err);
+          return;
+        }
+
+        try {
           modal.classList.remove('open');
           await loadCameras();
           selectCamera(newCam.id);
-        } catch (err) {
-          alert('Error uploading video: ' + err);
+        } catch (uiErr) {
+          console.error('Camera was created, but refreshing the UI failed:', uiErr);
+          modal.classList.remove('open');
         }
       }
     } else {
@@ -521,18 +535,40 @@ function setupEventListeners() {
         zones: []
       };
 
+      let saved;
       try {
-        const res = await fetch('/api/cameras', {
+        // Build an absolute URL explicitly rather than relying on the browser's
+        // relative-URL resolution against window.location -- some in-app
+        // webviews (e.g. WhatsApp's) load pages through a wrapped/rewritten
+        // location that can make plain relative fetch() calls fail.
+        const apiUrl = new URL('/api/cameras', window.location.href).toString();
+        const res = await fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const saved = await res.json();
+        if (!res.ok) {
+          const bodyText = await res.text().catch(() => '');
+          throw new Error(`Server rejected the request (${res.status}): ${bodyText.slice(0, 200) || res.statusText}`);
+        }
+        saved = await res.json();
+      } catch (err) {
+        // Nothing was created (or we can't tell) -- this is a real failure, show it.
+        console.error('Failed to create camera:', err);
+        alert('Error adding camera: ' + err);
+        return;
+      }
+
+      // Camera was successfully created on the server at this point. Any error
+      // from here on is just a UI-refresh glitch, not a creation failure -- log
+      // it instead of showing a misleading "Error adding camera" alert.
+      try {
         modal.classList.remove('open');
         await loadCameras();
         selectCamera(saved.id);
-      } catch (err) {
-        alert('Error adding camera: ' + err);
+      } catch (uiErr) {
+        console.error('Camera was created, but refreshing the UI failed:', uiErr);
+        modal.classList.remove('open');
       }
     }
   });
