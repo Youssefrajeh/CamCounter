@@ -1,0 +1,17 @@
+# Optional extra: face attribute analysis (age / gender / emotion).
+#
+# NOT included in requirements.txt on purpose -- deepface pulls in TensorFlow,
+# which is far too heavy for the 512MB Render "starter" plan targeted by
+# render.yaml (TensorFlow alone can use 300-500MB+ RAM just on import). Only
+# install this on a machine/plan with more headroom (local dev, or a bigger
+# Render/hosting plan), and only enable "Face Analysis" on cameras where you
+# actually want it (it's off by default per camera).
+#
+# Install with:
+#   pip install -r requirements.txt -r requirements-face.txt
+#
+# First analysis call downloads pretrained weights (~app ~100MB total) to
+# ~/.deepface/weights, so the first run needs internet access.
+
+deepface>=0.0.93
+tf-keras>=2.16.0

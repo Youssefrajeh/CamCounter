@@ -20,6 +20,11 @@ A real-time Computer Vision system for **USB Webcams**, **RTSP/IP Surveillance C
   - **Directional Tripwire (Line Crossing)**: Mathematical vector crossing detection for entrance / exit counts
   - **Polygonal Zone Occupancy**: Real-time headcount inside custom polygon zones (e.g. lobby, queues, checkout)
   - **Capacity & Occupancy Alerts**: Instant visual alerts and historical logging when room limit is exceeded
+- **Face Attribute Analysis (Optional)**:
+  - Per-person **Age**, **Gender**, and **Emotion** estimation via DeepFace, attached to existing tracked IDs
+  - Opt-in per camera (off by default) - runs in a background worker so it never blocks the video pipeline
+  - Live **Demographics** panel with average age, gender split, and emotion breakdown
+  - See [Face Attribute Analysis](#-face-attribute-analysis-optional) below before enabling
 - **Interactive Modern Web Dashboard**:
   - Live video feed with toggleable bounding boxes, person IDs, motion trails, tripwires, and zones
   - **Visual On-Screen Editor**: Click and draw tripwires and zones directly on top of the live video
@@ -70,6 +75,32 @@ http://localhost:8000
 
 ---
 
+## 🙂 Face Attribute Analysis (Optional)
+
+Estimates **age**, **gender**, and **dominant emotion** for each tracked person using [DeepFace](https://github.com/serengil/deepface), attached to the same track IDs used for counting.
+
+**This is opt-in and off by default** for two reasons:
+1. **Weight**: DeepFace pulls in TensorFlow, which is far heavier than this project's existing YOLOv8n + PyTorch stack. It is deliberately kept **out of `requirements.txt`** so the default install/deploy footprint (tuned for the 512MB Render "starter" plan in `render.yaml`) is unaffected.
+2. **Privacy**: age/gender/emotion inference on identifiable faces is biometric processing in a way anonymous person-counting is not. Only enable it on cameras/deployments where you have the appropriate consent or notice for that.
+
+### Installing the extra
+```bash
+pip install -r requirements.txt -r requirements-face.txt
+```
+The first analysis call downloads pretrained model weights (~100MB total) to `~/.deepface/weights`, so the first run needs internet access.
+
+### Enabling it
+- Check **"Enable Face Analysis"** when adding a camera (or toggle it per-camera later).
+- Toggle **"Faces"** in the video overlay controls to show/hide age/gender/emotion in the on-screen labels.
+- A **Demographics** card appears in the side panel with a live average age, gender split, and emotion breakdown for whoever is currently in frame.
+
+### How it behaves
+- Runs in a background thread per camera, separate from the detection/capture loop, so it can never drop your video FPS — it just refreshes each tracked person's attributes every few seconds (configurable via `face_analysis_interval`) rather than every frame.
+- If `deepface` isn't installed, cameras with the toggle on simply log a warning and skip face analysis instead of crashing.
+- Accuracy depends heavily on face size/angle/lighting in the frame — a person far from a wide-angle camera may never get a confident read.
+
+---
+
 ## 📁 Project Structure
 
 ```
@@ -79,6 +110,7 @@ CamCounter/
 │   ├── database.py         # SQLite persistence & analytics queries
 │   ├── analytics.py        # Line crossing & Point-in-polygon math
 │   ├── detector.py         # YOLO detection & ByteTrack wrapper
+│   ├── face_analyzer.py    # Optional DeepFace age/gender/emotion worker
 │   ├── camera_stream.py    # Threaded capture & annotation renderer
 │   ├── stream_manager.py   # Multi-camera coordinator
 │   └── app.py              # FastAPI server, REST & WebSockets
@@ -91,6 +123,7 @@ CamCounter/
 │       └── charts.js       # Dynamic Chart.js charts
 ├── data/                   # Database and video recordings
 ├── requirements.txt        # Python dependencies
+├── requirements-face.txt   # Optional: DeepFace age/gender/emotion extra
 ├── run.bat                 # Windows batch launcher
 ├── run.ps1                 # PowerShell launcher
 └── README.md

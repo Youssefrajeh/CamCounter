@@ -3,13 +3,15 @@ import time
 import cv2
 import numpy as np
 import threading
-from typing import Dict, Optional, Any
+from collections import defaultdict
+from typing import Dict, List, Optional, Any
 
 from backend.config import CameraConfig
 from backend.detector import PersonDetector
 from backend.analytics import SpatialAnalytics, TrackedObject
 from backend.database import db
 from backend.camera_stream import hex_to_bgr
+from backend.face_analyzer import FaceAttributeAnalyzer
 
 logger = logging.getLogger("camcounter.browser_stream")
 
@@ -29,6 +31,9 @@ class BrowserCameraProcessor:
             iou_threshold=config.iou_threshold
         )
         self.analytics = SpatialAnalytics(config.lines, config.zones)
+        self.face_analyzer = FaceAttributeAnalyzer(refresh_interval=config.face_analysis_interval)
+        if config.enable_face_analysis:
+            self.face_analyzer.start()
         self.tracked_objects: Dict[int, TrackedObject] = {}
         self.lock = threading.Lock()
 
@@ -60,10 +65,36 @@ class BrowserCameraProcessor:
 
     def update_config(self, new_config: CameraConfig):
         with self.lock:
+            was_enabled = self.config.enable_face_analysis
             self.config = new_config
             self.detector.conf_threshold = new_config.confidence_threshold
             self.detector.iou_threshold = new_config.iou_threshold
             self.analytics.update_config(new_config.lines, new_config.zones)
+            self.face_analyzer.refresh_interval = new_config.face_analysis_interval
+            if new_config.enable_face_analysis and not was_enabled:
+                self.face_analyzer.start()
+            elif not new_config.enable_face_analysis and was_enabled:
+                self.face_analyzer.stop()
+
+    def _build_demographics_summary(self) -> Dict[str, Any]:
+        if not self.config.enable_face_analysis:
+            return {}
+        ages: List[int] = []
+        genders: Dict[str, int] = defaultdict(int)
+        emotions: Dict[str, int] = defaultdict(int)
+        for track_id in self.tracked_objects:
+            attrs = self.face_analyzer.get(track_id)
+            if not attrs:
+                continue
+            ages.append(attrs["age"])
+            genders[attrs["gender"]] += 1
+            emotions[attrs["dominant_emotion"]] += 1
+        return {
+            "analyzed_count": len(ages),
+            "avg_age": round(sum(ages) / len(ages), 1) if ages else None,
+            "gender_breakdown": dict(genders),
+            "emotion_breakdown": dict(emotions),
+        }
 
     def process_frame(self, jpeg_bytes: bytes) -> tuple[Optional[bytes], Dict[str, Any]]:
         """
@@ -97,8 +128,15 @@ class BrowserCameraProcessor:
             for tid in stale_ids:
                 del self.tracked_objects[tid]
 
+            # 2b. Feed active tracks to the (background, non-blocking) face attribute analyzer
+            if self.config.enable_face_analysis:
+                for track_id, track in self.tracked_objects.items():
+                    self.face_analyzer.maybe_submit(track_id, frame, track.bbox)
+                self.face_analyzer.prune(active_ids)
+
             # 3. Spatial Analytics
             analytics_summary = self.analytics.process_tracks(self.tracked_objects)
+            analytics_summary["demographics"] = self._build_demographics_summary()
 
             # 4. Alerts
             if self.config.alert_enabled and analytics_summary["current_occupancy"] > self.config.alert_max_occupancy:
@@ -215,6 +253,10 @@ class BrowserCameraProcessor:
 
             if self.config.show_labels:
                 label = f"ID #{track_id} ({int(track.conf * 100)}%)"
+                if self.config.enable_face_analysis and self.config.show_face_attributes:
+                    attrs = self.face_analyzer.get(track_id)
+                    if attrs:
+                        label += f" | {attrs['age']}y {attrs['gender']} {attrs['dominant_emotion']}"
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
                 cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 6, y1), (0, 230, 118), -1)
                 cv2.putText(frame, label, (x1 + 3, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)

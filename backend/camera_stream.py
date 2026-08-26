@@ -7,10 +7,13 @@ import threading
 import numpy as np
 from typing import Dict, Optional, Tuple, List, Any
 
+from collections import defaultdict
+
 from backend.config import CameraConfig, Point, TripwireLine, OccupancyZone
 from backend.detector import PersonDetector
 from backend.analytics import SpatialAnalytics, TrackedObject
 from backend.database import db
+from backend.face_analyzer import FaceAttributeAnalyzer
 
 logger = logging.getLogger("camcounter.camera")
 
@@ -127,7 +130,10 @@ class CameraStream:
             iou_threshold=config.iou_threshold
         )
         self.analytics = SpatialAnalytics(config.lines, config.zones)
-        
+
+        # Optional face attribute analysis (age/gender/emotion) - opt-in, off by default
+        self.face_analyzer = FaceAttributeAnalyzer(refresh_interval=config.face_analysis_interval)
+
         # Tracking state: track_id -> TrackedObject
         self.tracked_objects: Dict[int, TrackedObject] = {}
         
@@ -160,6 +166,8 @@ class CameraStream:
         if self.running:
             return
         self.running = True
+        if self.config.enable_face_analysis:
+            self.face_analyzer.start()
         self.capture_thread = threading.Thread(target=self._run_pipeline, daemon=True)
         self.capture_thread.start()
         logger.info(f"Started camera stream for '{self.config.name}' (ID: {self.config.id})")
@@ -171,14 +179,21 @@ class CameraStream:
         if self.cap:
             self.cap.release()
             self.cap = None
+        self.face_analyzer.stop()
         logger.info(f"Stopped camera stream for '{self.config.name}' (ID: {self.config.id})")
 
     def update_config(self, new_config: CameraConfig):
         with self.lock:
+            was_enabled = self.config.enable_face_analysis
             self.config = new_config
             self.detector.conf_threshold = new_config.confidence_threshold
             self.detector.iou_threshold = new_config.iou_threshold
             self.analytics.update_config(new_config.lines, new_config.zones)
+            self.face_analyzer.refresh_interval = new_config.face_analysis_interval
+            if new_config.enable_face_analysis and not was_enabled:
+                self.face_analyzer.start()
+            elif not new_config.enable_face_analysis and was_enabled:
+                self.face_analyzer.stop()
 
     def _open_capture(self) -> bool:
         if self.config.source_type == "synthetic":
@@ -257,8 +272,15 @@ class CameraStream:
             for tid in stale_ids:
                 del self.tracked_objects[tid]
 
+            # 2b. Feed active tracks to the (background, non-blocking) face attribute analyzer
+            if self.config.enable_face_analysis:
+                for track_id, track in self.tracked_objects.items():
+                    self.face_analyzer.maybe_submit(track_id, frame, track.bbox)
+                self.face_analyzer.prune(active_ids)
+
             # 3. Process Spatial Analytics (Lines & Zones)
             analytics_summary = self.analytics.process_tracks(self.tracked_objects)
+            analytics_summary["demographics"] = self._build_demographics_summary()
 
             # 4. Check for Capacity Alerts
             if self.config.alert_enabled and analytics_summary["current_occupancy"] > self.config.alert_max_occupancy:
@@ -308,6 +330,32 @@ class CameraStream:
             sleep_time = target_frame_time - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
+    def _build_demographics_summary(self) -> Dict[str, Any]:
+        """Aggregates cached per-track face attributes (age/gender/emotion) into a
+        live snapshot for the currently tracked people. Empty when face analysis
+        is disabled or no attributes have been resolved yet."""
+        if not self.config.enable_face_analysis:
+            return {}
+
+        ages: List[int] = []
+        genders: Dict[str, int] = defaultdict(int)
+        emotions: Dict[str, int] = defaultdict(int)
+
+        for track_id in self.tracked_objects:
+            attrs = self.face_analyzer.get(track_id)
+            if not attrs:
+                continue
+            ages.append(attrs["age"])
+            genders[attrs["gender"]] += 1
+            emotions[attrs["dominant_emotion"]] += 1
+
+        return {
+            "analyzed_count": len(ages),
+            "avg_age": round(sum(ages) / len(ages), 1) if ages else None,
+            "gender_breakdown": dict(genders),
+            "emotion_breakdown": dict(emotions),
+        }
 
     def _render_annotations(self, frame: np.ndarray, analytics_summary: Dict[str, Any]) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -390,6 +438,10 @@ class CameraStream:
             # Label / ID Tag
             if self.config.show_labels:
                 label = f"ID #{track_id} ({int(track.conf * 100)}%)"
+                if self.config.enable_face_analysis and self.config.show_face_attributes:
+                    attrs = self.face_analyzer.get(track_id)
+                    if attrs:
+                        label += f" | {attrs['age']}y {attrs['gender']} {attrs['dominant_emotion']}"
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
                 cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 6, y1), (0, 230, 118), -1)
                 cv2.putText(frame, label, (x1 + 3, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)

@@ -73,6 +73,12 @@ class CameraConfig(BaseModel):
     zones: List[OccupancyZone] = Field(default_factory=list)
     alert_max_occupancy: int = 20
     alert_enabled: bool = True
+    # Optional face attribute analysis (age / gender / emotion). Off by default:
+    # requires the extra 'deepface' dependency (see requirements-face.txt) and
+    # noticeably more CPU/RAM per camera, so it's an explicit opt-in per camera.
+    enable_face_analysis: bool = False
+    show_face_attributes: bool = True
+    face_analysis_interval: float = 4.0
 
 
 class SystemSettings(BaseModel):

@@ -382,6 +382,9 @@ function updateDashboardFromAnalytics(data) {
   // Update Tripwires Table
   renderLinesTable(data.lines);
 
+  // Update Demographics (Age / Gender / Emotion) - only present when enabled on this camera
+  renderDemographicsCard(data.demographics);
+
   // Update Event Stream Log
   if (data.events && data.events.length > 0) {
     data.events.forEach(addEventLog);
@@ -505,6 +508,7 @@ function setupEventListeners() {
         url = document.getElementById('input-cam-url').value;
       }
 
+      const enableFaceAnalysis = document.getElementById('input-cam-face-analysis').checked;
       const payload = {
         id: 'cam_' + Date.now().toString(36),
         name: name,
@@ -512,6 +516,7 @@ function setupEventListeners() {
         source_url: url,
         enabled: true,
         alert_max_occupancy: alertThresh,
+        enable_face_analysis: enableFaceAnalysis,
         lines: [],
         zones: []
       };
@@ -584,7 +589,7 @@ function setupEventListeners() {
   });
 
   // Overlay Toggles
-  ['chk-show-boxes', 'chk-show-labels', 'chk-show-trails', 'chk-show-lines', 'chk-show-zones'].forEach(id => {
+  ['chk-show-boxes', 'chk-show-labels', 'chk-show-trails', 'chk-show-lines', 'chk-show-zones', 'chk-show-face-attrs'].forEach(id => {
     const el = document.getElementById(id);
     if (el) {
       el.addEventListener('change', async () => {
@@ -595,6 +600,7 @@ function setupEventListeners() {
           cam.show_trails = document.getElementById('chk-show-trails').checked;
           cam.show_lines = document.getElementById('chk-show-lines').checked;
           cam.show_zones = document.getElementById('chk-show-zones').checked;
+          cam.show_face_attributes = document.getElementById('chk-show-face-attrs').checked;
           await updateCameraConfig(cam);
         }
       });
@@ -680,6 +686,10 @@ function selectCamera(camId) {
   document.getElementById('chk-show-trails').checked = cam.show_trails;
   document.getElementById('chk-show-lines').checked = cam.show_lines;
   document.getElementById('chk-show-zones').checked = cam.show_zones;
+  document.getElementById('chk-show-face-attrs').checked = cam.show_face_attributes;
+
+  const demoCard = document.getElementById('demographics-card');
+  if (demoCard) demoCard.style.display = cam.enable_face_analysis ? '' : 'none';
 
   if (cam.source_type === 'browser') {
     // Start browser camera stream
@@ -762,6 +772,41 @@ function handleTelemetry(allData) {
       }
     }
   }
+}
+
+function renderDemographicsCard(demographics) {
+  const card = document.getElementById('demographics-card');
+  if (!card) return;
+
+  if (!demographics || Object.keys(demographics).length === 0) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+
+  document.getElementById('demo-analyzed-count').textContent = demographics.analyzed_count || 0;
+  document.getElementById('demo-avg-age').textContent = demographics.avg_age != null ? demographics.avg_age : '-';
+
+  const genderEl = document.getElementById('demo-gender-breakdown');
+  const emotionEl = document.getElementById('demo-emotion-breakdown');
+
+  const renderChips = (container, breakdown) => {
+    container.innerHTML = '';
+    const entries = Object.entries(breakdown || {});
+    if (entries.length === 0) {
+      container.innerHTML = '<span style="color: var(--text-muted); font-size: 0.75rem;">No data yet</span>';
+      return;
+    }
+    for (const [label, count] of entries) {
+      const chip = document.createElement('span');
+      chip.className = 'demo-chip';
+      chip.textContent = `${escapeHtml(label)}: ${count}`;
+      container.appendChild(chip);
+    }
+  };
+
+  renderChips(genderEl, demographics.gender_breakdown);
+  renderChips(emotionEl, demographics.emotion_breakdown);
 }
 
 function renderZonesTable(zones) {

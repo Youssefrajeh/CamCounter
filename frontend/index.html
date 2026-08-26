@@ -267,6 +267,10 @@
                   <input type="checkbox" id="chk-show-zones" checked>
                   <span>Zones</span>
                 </label>
+                <label class="toggle-label">
+                  <input type="checkbox" id="chk-show-face-attrs" checked>
+                  <span>Faces</span>
+                </label>
               </div>
 
               <div>
@@ -326,6 +330,28 @@
                     <!-- Dynamic tripwires info -->
                   </tbody>
                 </table>
+              </div>
+            </div>
+
+            <!-- Face Attribute Demographics Card (only populated when Face Analysis is enabled) -->
+            <div class="card" id="demographics-card" style="display: none;">
+              <div class="card-header">
+                <div class="card-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                  Demographics (Live)
+                </div>
+              </div>
+              <div id="demographics-body" style="display: flex; flex-direction: column; gap: 10px; font-size: 0.8rem;">
+                <div>
+                  Analyzed: <strong id="demo-analyzed-count">0</strong>
+                  &nbsp;|&nbsp;
+                  Avg Age: <strong id="demo-avg-age">-</strong>
+                </div>
+                <div id="demo-gender-breakdown" class="toggle-group" style="flex-wrap: wrap;"></div>
+                <div id="demo-emotion-breakdown" class="toggle-group" style="flex-wrap: wrap;"></div>
               </div>
             </div>
 
@@ -421,6 +447,16 @@
         <div class="form-group">
           <label>Max Occupancy Alert Threshold</label>
           <input type="number" id="input-cam-alert-thresh" class="form-control" value="20" min="1" max="500" />
+        </div>
+
+        <div class="form-group">
+          <label class="toggle-label" style="gap: 8px;">
+            <input type="checkbox" id="input-cam-face-analysis" />
+            <span>Enable Face Analysis (Age / Gender / Emotion)</span>
+          </label>
+          <small style="display:block; color: var(--text-muted); margin-top: 4px;">
+            Optional &amp; heavier on CPU. Requires the server's <code>deepface</code> extra to be installed.
+          </small>
         </div>
 
         <div class="modal-footer">

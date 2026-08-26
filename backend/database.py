@@ -45,10 +45,25 @@ class Database:
                     zones_json TEXT NOT NULL DEFAULT '[]',
                     alert_max_occupancy INTEGER NOT NULL DEFAULT 20,
                     alert_enabled INTEGER NOT NULL DEFAULT 1,
+                    enable_face_analysis INTEGER NOT NULL DEFAULT 0,
+                    show_face_attributes INTEGER NOT NULL DEFAULT 1,
+                    face_analysis_interval REAL NOT NULL DEFAULT 4.0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Migrate older databases created before face-analysis columns existed.
+            cursor.execute("PRAGMA table_info(cameras)")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            migrations = {
+                "enable_face_analysis": "INTEGER NOT NULL DEFAULT 0",
+                "show_face_attributes": "INTEGER NOT NULL DEFAULT 1",
+                "face_analysis_interval": "REAL NOT NULL DEFAULT 4.0",
+            }
+            for col, decl in migrations.items():
+                if col not in existing_cols:
+                    cursor.execute(f"ALTER TABLE cameras ADD COLUMN {col} {decl}")
 
             # Count Events / Snapshots Table
             cursor.execute("""
@@ -126,7 +141,10 @@ class Database:
                     lines=lines,
                     zones=zones,
                     alert_max_occupancy=row["alert_max_occupancy"],
-                    alert_enabled=bool(row["alert_enabled"])
+                    alert_enabled=bool(row["alert_enabled"]),
+                    enable_face_analysis=bool(row["enable_face_analysis"]),
+                    show_face_attributes=bool(row["show_face_attributes"]),
+                    face_analysis_interval=row["face_analysis_interval"]
                 ))
             return cameras
 
@@ -157,7 +175,10 @@ class Database:
                 lines=lines,
                 zones=zones,
                 alert_max_occupancy=row["alert_max_occupancy"],
-                alert_enabled=bool(row["alert_enabled"])
+                alert_enabled=bool(row["alert_enabled"]),
+                enable_face_analysis=bool(row["enable_face_analysis"]),
+                show_face_attributes=bool(row["show_face_attributes"]),
+                face_analysis_interval=row["face_analysis_interval"]
             )
 
     def save_camera(self, camera: CameraConfig):
@@ -171,8 +192,9 @@ class Database:
                     confidence_threshold, iou_threshold, model_name,
                     show_boxes, show_labels, show_trails, show_zones, show_lines,
                     lines_json, zones_json, alert_max_occupancy, alert_enabled,
+                    enable_face_analysis, show_face_attributes, face_analysis_interval,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     source_type=excluded.source_type,
@@ -191,6 +213,9 @@ class Database:
                     zones_json=excluded.zones_json,
                     alert_max_occupancy=excluded.alert_max_occupancy,
                     alert_enabled=excluded.alert_enabled,
+                    enable_face_analysis=excluded.enable_face_analysis,
+                    show_face_attributes=excluded.show_face_attributes,
+                    face_analysis_interval=excluded.face_analysis_interval,
                     updated_at=CURRENT_TIMESTAMP
             """, (
                 camera.id, camera.name, camera.source_type, camera.source_url,
@@ -198,7 +223,8 @@ class Database:
                 camera.confidence_threshold, camera.iou_threshold, camera.model_name,
                 int(camera.show_boxes), int(camera.show_labels), int(camera.show_trails),
                 int(camera.show_zones), int(camera.show_lines),
-                lines_json, zones_json, camera.alert_max_occupancy, int(camera.alert_enabled)
+                lines_json, zones_json, camera.alert_max_occupancy, int(camera.alert_enabled),
+                int(camera.enable_face_analysis), int(camera.show_face_attributes), camera.face_analysis_interval
             ))
             conn.commit()
 
