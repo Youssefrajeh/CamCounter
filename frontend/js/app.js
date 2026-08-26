@@ -750,8 +750,15 @@ function setupEventListeners() {
           cam.show_trails = document.getElementById('chk-show-trails').checked;
           cam.show_lines = document.getElementById('chk-show-lines').checked;
           cam.show_zones = document.getElementById('chk-show-zones').checked;
-          cam.show_face_attributes = document.getElementById('chk-show-face-attrs').checked;
+          // "Faces" is the master on/off for face analysis on this camera, not
+          // just a display preference -- toggling it actually starts/stops the
+          // background analyzer (see backend/camera_stream.py update_config()).
+          const faceAnalysisOn = document.getElementById('chk-show-face-attrs').checked;
+          cam.enable_face_analysis = faceAnalysisOn;
+          cam.show_face_attributes = faceAnalysisOn;
           await updateCameraConfig(cam);
+          const demoCard = document.getElementById('demographics-card');
+          if (demoCard) demoCard.style.display = faceAnalysisOn ? '' : 'none';
         }
       });
     }
@@ -837,7 +844,7 @@ function selectCamera(camId) {
   document.getElementById('chk-show-trails').checked = cam.show_trails;
   document.getElementById('chk-show-lines').checked = cam.show_lines;
   document.getElementById('chk-show-zones').checked = cam.show_zones;
-  document.getElementById('chk-show-face-attrs').checked = cam.show_face_attributes;
+  document.getElementById('chk-show-face-attrs').checked = cam.enable_face_analysis;
 
   const demoCard = document.getElementById('demographics-card');
   if (demoCard) demoCard.style.display = cam.enable_face_analysis ? '' : 'none';

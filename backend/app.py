@@ -7,6 +7,17 @@ os.environ.setdefault("TORCH_NUM_THREADS", "1")
 os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "65536")
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
 
+import sys
+# Windows consoles often default stdout/stderr to a legacy codepage (e.g.
+# cp1252) that can't encode emoji -- some optional deps (deepface's logger)
+# print them directly, which would otherwise crash that thread with a
+# UnicodeEncodeError. Degrade gracefully instead of raising.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import io
 import csv
 import json

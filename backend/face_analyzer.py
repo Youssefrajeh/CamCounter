@@ -143,7 +143,12 @@ class FaceAttributeAnalyzer:
                         crop,
                         actions=("age", "gender", "emotion"),
                         enforce_detection=False,  # crop is already a person box; don't discard on a soft face miss
-                        detector_backend="opencv",
+                        # "skip" = use the whole crop as-is, no re-detection inside it.
+                        # The "opencv" backend needs a Haar cascade XML that only ships
+                        # with full opencv-python, not the opencv-python-headless this
+                        # project uses -- "skip" also avoids that dependency entirely,
+                        # and is a good fit since we already crop to YOLO's person box.
+                        detector_backend="skip",
                         silent=True,
                     )
                 if isinstance(analysis, list):
