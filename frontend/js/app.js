@@ -6,6 +6,51 @@ let ws = null;
 let editor = null;
 let browserCamStream = null; // Active browser camera stream
 
+// =============================================
+// Backend connectivity helpers
+// =============================================
+
+/**
+ * fetch() + JSON parse with clear, specific error messages instead of the
+ * cryptic "Unexpected end of JSON input" / WebKit "did not match the
+ * expected pattern" you get from calling res.json() on a non-OK or empty
+ * response (e.g. the API route 404ing because the backend isn't deployed
+ * behind this host).
+ */
+async function apiFetchJson(url, options) {
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch (networkErr) {
+    throw new Error(`Cannot reach the server at ${url} (${networkErr.message})`);
+  }
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => '');
+    throw new Error(`Server returned ${res.status} ${res.statusText} for ${url}${bodyText ? ': ' + bodyText.slice(0, 200) : ' (empty response)'}`);
+  }
+  const text = await res.text();
+  if (!text) {
+    return null; // e.g. a 204/empty-body success response
+  }
+  try {
+    return JSON.parse(text);
+  } catch (parseErr) {
+    throw new Error(`Server response from ${url} wasn't valid JSON: ${text.slice(0, 200)}`);
+  }
+}
+
+function showBackendError(message) {
+  const banner = document.getElementById('backend-error-banner');
+  const detail = document.getElementById('backend-error-detail');
+  if (detail) detail.textContent = message || "The dashboard can't load data from the backend right now.";
+  if (banner) banner.style.display = 'flex';
+}
+
+function hideBackendError() {
+  const banner = document.getElementById('backend-error-banner');
+  if (banner) banner.style.display = 'none';
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
   window.ChartsManager.initCharts();
@@ -13,21 +58,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setupEventListeners();
   loadCameras().then(() => {
-    detectPhoneCamera();
+    detectSystemCameras();
   });
   connectWebSocket();
 });
 
 // =============================================
-// Phone Camera Auto-Detection
+// System Camera Auto-Detection
 // =============================================
 
+let detectedCameraDevices = []; // Populated by detectSystemCameras(): every videoinput on this device
+
 /**
- * Detects if the device has a camera available and shows a one-tap
- * banner to start streaming, so users don't have to manually add a
- * browser camera through the modal.
+ * Detects every camera available on the device the dashboard is open on
+ * (phone, laptop, desktop webcam -- anything getUserMedia can see) and
+ * shows a one-tap banner to start streaming, so users don't have to
+ * manually add a camera through the modal. Works identically on mobile
+ * and desktop; the "Phone Camera" framing was misleading, this isn't
+ * mobile-specific.
  */
-async function detectPhoneCamera() {
+async function detectSystemCameras() {
   try {
     // Skip if not a secure context (getUserMedia won't work anyway)
     if (!window.isSecureContext) return;
@@ -39,41 +89,61 @@ async function detectPhoneCamera() {
     const hasBrowserCam = allCameras.some(c => c.source_type === 'browser');
     if (hasBrowserCam) return;
 
-    // Check if the device actually has a camera
-    // enumerateDevices may require permission on some browsers, but on most
-    // it returns device kinds without labels (which is enough for detection)
-    let hasCamera = false;
+    // Enumerate available video input devices. Note: device.label is only
+    // populated once permission has been granted at least once in this
+    // origin -- before that browsers return devices with blank labels for
+    // privacy, so we fall back to "Camera N".
+    let cameras = [];
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      hasCamera = devices.some(d => d.kind === 'videoinput');
+      cameras = devices.filter(d => d.kind === 'videoinput');
     } catch {
-      // If enumerateDevices fails, assume camera might be available on
-      // touch-capable devices (phones/tablets)
-      hasCamera = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      // enumerateDevices itself failed; assume a camera might still be
+      // available on touch-capable devices (phones/tablets) and let
+      // getUserMedia be the real source of truth when the user taps Start.
+      if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+        cameras = [{ deviceId: '', label: '' }];
+      }
     }
 
-    if (!hasCamera) return;
+    if (cameras.length === 0) return;
+    detectedCameraDevices = cameras;
 
     // Show the auto-detect banner
     const banner = document.getElementById('mobile-cam-banner');
+    const subtitle = document.getElementById('mobile-cam-banner-subtitle');
+    const select = document.getElementById('mobile-cam-device-select');
     banner.style.display = 'flex';
+
+    if (cameras.length > 1) {
+      subtitle.textContent = `${cameras.length} cameras found on this device -- pick one and tap Start`;
+      select.innerHTML = cameras.map((cam, i) =>
+        `<option value="${i}">${escapeHtml(cam.label || `Camera ${i + 1}`)}</option>`
+      ).join('');
+      select.style.display = '';
+    } else {
+      subtitle.textContent = 'Tap to start live AI people counting with your camera';
+      select.style.display = 'none';
+    }
 
     // Wire up the one-tap start button
     document.getElementById('btn-auto-start-cam').addEventListener('click', async () => {
-      await autoStartPhoneCamera();
+      await autoStartSystemCamera();
     }, { once: true });
 
   } catch (err) {
-    console.warn('Phone camera auto-detection failed:', err);
+    console.warn('System camera auto-detection failed:', err);
   }
 }
 
 /**
- * Auto-creates a browser camera feed and starts streaming — one tap, no modal.
+ * Auto-creates a browser camera feed from the detected/selected device and
+ * starts streaming -- one tap, no modal.
  */
-async function autoStartPhoneCamera() {
+async function autoStartSystemCamera() {
   const banner = document.getElementById('mobile-cam-banner');
   const btn = document.getElementById('btn-auto-start-cam');
+  const select = document.getElementById('mobile-cam-device-select');
 
   // Show loading state
   btn.disabled = true;
@@ -85,33 +155,37 @@ async function autoStartPhoneCamera() {
   `;
 
   try {
-    // Determine preferred facing mode: back camera for counting, front as fallback
-    let facingMode = 'environment';
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cameras = devices.filter(d => d.kind === 'videoinput');
-      // If only one camera (e.g., a laptop), just use it
-      if (cameras.length === 1) facingMode = 'user';
-    } catch { /* use default */ }
+    // If the user picked a specific device from the dropdown, target it
+    // directly. Otherwise fall back to a facingMode guess (back camera,
+    // unless there's only one camera on the device -- e.g. a laptop).
+    let sourceSpec = 'environment';
+    if (select.style.display !== 'none' && select.value !== '') {
+      const chosen = detectedCameraDevices[parseInt(select.value, 10)];
+      if (chosen && chosen.deviceId) {
+        sourceSpec = 'device:' + chosen.deviceId;
+      }
+    } else if (detectedCameraDevices.length === 1) {
+      sourceSpec = 'user';
+    }
 
     // Create the camera on the backend
     const payload = {
-      id: 'phone_cam_' + Date.now().toString(36),
-      name: 'Phone Camera',
+      id: 'cam_' + Date.now().toString(36),
+      name: 'This Device Camera',
       source_type: 'browser',
-      source_url: facingMode,
+      source_url: sourceSpec,
       enabled: true,
       alert_max_occupancy: 20,
       lines: [],
       zones: []
     };
 
-    const res = await fetch('/api/cameras', {
+    const saved = await apiFetchJson('/api/cameras', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const saved = await res.json();
+    hideBackendError();
 
     // Hide the banner
     banner.style.display = 'none';
@@ -121,7 +195,8 @@ async function autoStartPhoneCamera() {
     selectCamera(saved.id);
 
   } catch (err) {
-    console.error('Failed to auto-start phone camera:', err);
+    console.error('Failed to auto-start system camera:', err);
+    showBackendError(err.message);
     btn.disabled = false;
     btn.innerHTML = `
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -131,19 +206,27 @@ async function autoStartPhoneCamera() {
     `;
     // Re-attach the click handler for retry
     btn.addEventListener('click', async () => {
-      await autoStartPhoneCamera();
+      await autoStartSystemCamera();
     }, { once: true });
   }
 }
 
 // =============================================
-// Browser Camera Stream (Phone Camera)
+// Browser Camera Stream (any camera on this device: phone, laptop, desktop webcam)
 // =============================================
 
 class BrowserCameraStream {
-  constructor(cameraId, facingMode = 'environment') {
+  constructor(cameraId, sourceSpec = 'environment') {
     this.cameraId = cameraId;
-    this.facingMode = facingMode;
+    // sourceSpec is either a facingMode ('environment'/'user') or a specific
+    // device pick encoded as 'device:<deviceId>' (see detectSystemCameras()).
+    if (typeof sourceSpec === 'string' && sourceSpec.startsWith('device:')) {
+      this.deviceId = sourceSpec.slice('device:'.length);
+      this.facingMode = null;
+    } else {
+      this.facingMode = sourceSpec || 'environment';
+      this.deviceId = null;
+    }
     this.video = document.getElementById('browser-cam-video');
     this.captureCanvas = document.getElementById('browser-cam-canvas');
     this.captureCtx = this.captureCanvas.getContext('2d');
@@ -175,21 +258,23 @@ class BrowserCameraStream {
         throw new Error(msg);
       }
 
-      // Request camera access with ideal facingMode (not exact) to prevent
-      // OverconstrainedError on devices that can't satisfy the exact mode.
-      // Falls back to any available camera if the preferred one isn't available.
+      // Request the specific device the user picked (if any), otherwise an
+      // ideal (not exact) facingMode to prevent OverconstrainedError on
+      // devices that can't satisfy it. Falls back to any available camera
+      // if the preferred one isn't available.
+      const primaryConstraint = this.deviceId
+        ? { deviceId: { exact: this.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
+        : { facingMode: { ideal: this.facingMode }, width: { ideal: 640 }, height: { ideal: 480 } };
+
       let stream = null;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: this.facingMode },
-            width: { ideal: 640 },
-            height: { ideal: 480 }
-          },
+          video: primaryConstraint,
           audio: false
         });
       } catch (firstErr) {
-        console.warn(`Camera with facingMode '${this.facingMode}' failed: ${firstErr.message}. Trying any camera...`);
+        const target = this.deviceId ? `device '${this.deviceId}'` : `facingMode '${this.facingMode}'`;
+        console.warn(`Camera with ${target} failed: ${firstErr.message}. Trying any camera...`);
         // Fallback: request any available camera without facingMode constraint
         try {
           stream = await navigator.mediaDevices.getUserMedia({
@@ -412,6 +497,14 @@ function setupEventListeners() {
     sidebarOverlay.classList.remove('open');
   });
 
+  // Backend connectivity error banner retry
+  const retryBackendBtn = document.getElementById('btn-retry-backend');
+  if (retryBackendBtn) {
+    retryBackendBtn.addEventListener('click', () => {
+      loadCameras();
+    });
+  }
+
   // Add Camera Modal
   const modal = document.getElementById('modal-add-camera');
   const closeBtn = document.getElementById('btn-close-camera-modal');
@@ -490,14 +583,11 @@ function setupEventListeners() {
         let newCam;
         try {
           const uploadUrl = new URL('/api/cameras/upload-video', window.location.href).toString();
-          const res = await fetch(uploadUrl, { method: 'POST', body: formData });
-          if (!res.ok) {
-            const bodyText = await res.text().catch(() => '');
-            throw new Error(`Server rejected the upload (${res.status}): ${bodyText.slice(0, 200) || res.statusText}`);
-          }
-          newCam = await res.json();
+          newCam = await apiFetchJson(uploadUrl, { method: 'POST', body: formData });
+          hideBackendError();
         } catch (err) {
           console.error('Failed to upload video camera:', err);
+          showBackendError(err.message);
           alert('Error uploading video: ' + err);
           return;
         }
@@ -542,18 +632,15 @@ function setupEventListeners() {
         // webviews (e.g. WhatsApp's) load pages through a wrapped/rewritten
         // location that can make plain relative fetch() calls fail.
         const apiUrl = new URL('/api/cameras', window.location.href).toString();
-        const res = await fetch(apiUrl, {
+        saved = await apiFetchJson(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (!res.ok) {
-          const bodyText = await res.text().catch(() => '');
-          throw new Error(`Server rejected the request (${res.status}): ${bodyText.slice(0, 200) || res.statusText}`);
-        }
-        saved = await res.json();
+        hideBackendError();
       } catch (err) {
         // Nothing was created (or we can't tell) -- this is a real failure, show it.
+        showBackendError(err.message);
         console.error('Failed to create camera:', err);
         alert('Error adding camera: ' + err);
         return;
@@ -647,8 +734,8 @@ function setupEventListeners() {
 // Fetch all cameras
 async function loadCameras() {
   try {
-    const res = await fetch('/api/cameras');
-    allCameras = await res.json();
+    allCameras = await apiFetchJson('/api/cameras') || [];
+    hideBackendError();
     renderCameraList();
 
     if (allCameras.length > 0) {
@@ -658,6 +745,7 @@ async function loadCameras() {
     }
   } catch (err) {
     console.error('Failed to load cameras:', err);
+    showBackendError(err.message);
   }
 }
 
@@ -678,7 +766,7 @@ function renderCameraList() {
       document.getElementById('sidebar-overlay').classList.remove('open');
     };
 
-    const typeLabel = cam.source_type === 'browser' ? '📱 PHONE' : cam.source_type.toUpperCase();
+    const typeLabel = cam.source_type === 'browser' ? '📷 DEVICE CAM' : cam.source_type.toUpperCase();
 
     card.innerHTML = `
       <div class="cam-header">
@@ -728,9 +816,10 @@ function selectCamera(camId) {
   if (demoCard) demoCard.style.display = cam.enable_face_analysis ? '' : 'none';
 
   if (cam.source_type === 'browser') {
-    // Start browser camera stream
-    const facingMode = cam.source_url || 'environment';
-    browserCamStream = new BrowserCameraStream(camId, facingMode);
+    // Start browser camera stream (source_url holds either a facingMode
+    // string or a 'device:<id>' pick from detectSystemCameras())
+    const sourceSpec = cam.source_url || 'environment';
+    browserCamStream = new BrowserCameraStream(camId, sourceSpec);
     browserCamStream.start().catch(err => {
       console.error('Failed to start browser camera:', err);
     });
@@ -764,6 +853,8 @@ async function updateCameraConfig(camConfig) {
 }
 
 // Connect to WebSocket for real-time telemetry
+let wsConsecutiveFailures = 0;
+
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -772,6 +863,8 @@ function connectWebSocket() {
 
   ws.onopen = () => {
     console.log('Telemetry WebSocket connected.');
+    wsConsecutiveFailures = 0;
+    hideBackendError();
   };
 
   ws.onmessage = (event) => {
@@ -787,6 +880,12 @@ function connectWebSocket() {
 
   ws.onclose = () => {
     console.log('WS disconnected. Reconnecting in 2s...');
+    wsConsecutiveFailures += 1;
+    // Only surface the banner after a few consecutive drops so a single
+    // transient disconnect doesn't flash an alarming message.
+    if (wsConsecutiveFailures >= 3) {
+      showBackendError("Can't reach the live telemetry connection (WebSocket). The server may be unreachable.");
+    }
     setTimeout(connectWebSocket, 2000);
   };
 }

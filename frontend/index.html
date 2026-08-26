@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=3.0">
+  <link rel="stylesheet" href="css/styles.css?v=3.2">
   <!-- Chart.js for live metrics -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -111,6 +111,22 @@
 
       <!-- Dashboard Body -->
       <div class="dashboard-body">
+        <!-- Backend Unreachable Banner (hidden by default, shown via JS when the API/WS can't be reached) -->
+        <div class="backend-error-banner" id="backend-error-banner" style="display: none;">
+          <div class="backend-error-banner-content">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            <div>
+              <strong>Can't reach the server</strong>
+              <span id="backend-error-detail">The dashboard can't load data from the backend right now.</span>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btn-retry-backend">Retry</button>
+        </div>
+
         <!-- Mobile Camera Auto-Detect Banner (hidden by default, shown via JS) -->
         <div class="mobile-cam-banner" id="mobile-cam-banner" style="display: none;">
           <div class="mobile-cam-banner-content">
@@ -121,10 +137,11 @@
               </svg>
             </div>
             <div class="mobile-cam-banner-text">
-              <strong>📱 Phone Camera Detected</strong>
-              <span>Tap to start live AI people counting with your camera</span>
+              <strong id="mobile-cam-banner-title">Camera Detected</strong>
+              <span id="mobile-cam-banner-subtitle">Tap to start live AI people counting with your camera</span>
             </div>
           </div>
+          <select class="form-control" id="mobile-cam-device-select" style="display:none; max-width: 200px;"></select>
           <button class="btn btn-primary btn-mobile-cam" id="btn-auto-start-cam">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -472,8 +489,8 @@
   <canvas id="browser-cam-canvas" style="display:none;"></canvas>
 
   <!-- Scripts -->
-  <script src="js/charts.js?v=3.1"></script>
-  <script src="js/canvas_editor.js?v=3.1"></script>
-  <script src="js/app.js?v=3.1"></script>
+  <script src="js/charts.js?v=3.2"></script>
+  <script src="js/canvas_editor.js?v=3.2"></script>
+  <script src="js/app.js?v=3.2"></script>
 </body>
 </html>

@@ -846,6 +846,43 @@ body {
 }
 
 /* Mobile Camera Auto-Detect Banner */
+.backend-error-banner {
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.1), rgba(244, 63, 94, 0.04));
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  border-radius: var(--radius-md);
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--accent-rose);
+  animation: bannerSlideIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.backend-error-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.backend-error-banner-content svg {
+  flex-shrink: 0;
+}
+
+.backend-error-banner-content strong {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.backend-error-banner-content span {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
 .mobile-cam-banner {
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(6, 182, 212, 0.08));
   border: 1px solid rgba(16, 185, 129, 0.25);
@@ -1173,13 +1210,15 @@ body {
   }
 
   /* Banner stacks vertically on mobile */
-  .mobile-cam-banner {
+  .mobile-cam-banner,
+  .backend-error-banner {
     flex-direction: column;
     text-align: center;
     padding: 14px 16px;
   }
 
-  .mobile-cam-banner-content {
+  .mobile-cam-banner-content,
+  .backend-error-banner-content {
     flex-direction: column;
     gap: 8px;
   }
