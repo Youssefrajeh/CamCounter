@@ -156,19 +156,7 @@ body {
 }
 
 .camera-card-add {
-  background: rgba(16, 185, 129, 0.05);
-  border: 1px dashed rgba(16, 185, 129, 0.4);
-  text-align: center;
-  justify-content: center;
-  align-items: center;
-  padding: 12px 14px;
-}
-
-.camera-card-add:hover {
-  background: rgba(16, 185, 129, 0.12);
-  border-color: var(--accent-green);
-  border-style: solid;
-  transform: translateY(-1px);
+  display: none !important;
 }
 
 .camera-card:hover {
