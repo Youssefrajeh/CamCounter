@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=2.2">
+  <link rel="stylesheet" href="css/styles.css?v=2.4">
   <!-- Chart.js for live metrics -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -34,6 +34,17 @@
         </div>
       </div>
 
+      <!-- Top Action: Add Camera Feed Button -->
+      <div class="sidebar-top-action">
+        <button class="btn btn-primary btn-trigger-add-cam" id="btn-open-add-camera">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          Add Camera Feed
+        </button>
+      </div>
+
       <div class="sidebar-section">
         <div class="section-title">
           <span>Connected Cameras</span>
@@ -50,16 +61,6 @@
         <div class="camera-list" id="camera-list-container">
           <!-- Dynamic camera cards populated here -->
         </div>
-      </div>
-
-      <div class="sidebar-actions">
-        <button class="btn btn-primary btn-trigger-add-cam" id="btn-open-add-camera">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-          Add Camera Feed
-        </button>
       </div>
     </aside>
 
@@ -443,8 +444,8 @@
   <canvas id="browser-cam-canvas" style="display:none;"></canvas>
 
   <!-- Scripts -->
-  <script src="js/charts.js"></script>
-  <script src="js/canvas_editor.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/charts.js?v=2.4"></script>
+  <script src="js/canvas_editor.js?v=2.4"></script>
+  <script src="js/app.js?v=2.4"></script>
 </body>
 </html>
